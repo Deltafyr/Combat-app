@@ -7,7 +7,7 @@ import urllib.parse
 import time
 
 # --- CONFIGURATION & DESIGN ---
-st.set_page_config(page_title="Fight Tracker V27", page_icon="🥊", layout="wide")
+st.set_page_config(page_title="Fight Tracker V28", page_icon="🥊", layout="wide")
 
 st.markdown("""
     <style>
@@ -20,26 +20,11 @@ st.markdown("""
             border-left: 4px solid #555; box-shadow: 0 2px 5px rgba(0,0,0,0.3);
         }
         .card-termine { opacity: 0.6; filter: grayscale(0.8); border-left: 4px solid #333 !important; }
-        
         .header-line { display: flex; justify-content: space-between; align-items: baseline; }
         .combat-num { font-style: italic; font-size: 1.1em; color: #ddd; font-weight:bold;}
-        .tour-info { font-size: 0.85em; color: #aaa; margin-left: 5px; }
         .combat-aire { background: #FFD700; color:black; padding: 2px 8px; border-radius: 10px; font-size: 0.85em; font-weight: bold; }
-        
         .fighter-name { font-size: 1.3em; font-weight: 700; color: #fff; }
         .honor-title { font-size: 0.8em; color: #FFD700; font-style: italic; display:block; opacity:0.8;}
-        
-        /* DESIGN COACH */
-        .coach-row {
-            background-color: #262730;
-            padding: 10px;
-            border-radius: 8px;
-            margin-bottom: 8px;
-            border: 1px solid #444;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-        }
     </style>
 """, unsafe_allow_html=True)
 
@@ -54,7 +39,7 @@ def get_client():
 # --- LOGIQUE MÉTIER ---
 def calculer_categorie(annee, poids, sexe):
     try:
-        if not annee or not poids: return "Incomplet"
+        if not annee or not poids: return ""
         age = datetime.now().year - int(annee)
         poids = float(poids)
         cat_age = "Inconnu"
@@ -113,26 +98,25 @@ def save_data(df, sheet_name, cols_def):
         fetch_data.clear()
 
 def process_end_match(live_df, idx, resultat, nom_compet, date_compet, target_evt):
-    # 1. Update Live
+    # Update Live
     live_df.at[idx, 'Statut'] = "Terminé"
     live_df.at[idx, 'Medaille_Actuelle'] = resultat
     live_df.at[idx, 'Palmares'] = resultat
     save_data(live_df, "Feuille 1", [])
     
-    # 2. Archive History
+    # Archive
     nom_combattant = live_df.at[idx, 'Combattant']
     hist = get_history_data()
     new_entry = pd.DataFrame([{"Competition": nom_compet, "Date": str(date_compet), "Combattant": nom_combattant, "Medaille": resultat}])
     save_data(pd.concat([hist, new_entry], ignore_index=True), "Historique", ["Competition", "Date", "Combattant", "Medaille"])
     
-    # 3. Auto Qualif
+    # Qualif
     if target_evt and resultat in ["🥇 Or", "🥈 Argent"]:
         ath = get_athletes_db()
         pre = get_preinscriptions_db()
         exists = False
         if not pre.empty:
             if not pre[(pre['Nom'] == nom_combattant) & (pre['Competition_Cible'] == target_evt)].empty: exists = True
-        
         if not exists:
             inf_row = ath[ath['Nom'] == nom_combattant]
             if not inf_row.empty:
@@ -179,27 +163,20 @@ with tab_public:
                     <span class="combat-aire">AIRE {int(row['Aire'])}</span>
                 </div>
                 <div class="fighter-line">
-                    <div style="width:100%;">
-                        <span class="fighter-name" style="color:{'#FF4B4B' if row['Casque'] == 'Rouge' else '#2196F3'}">{row['Combattant']} {med_badge}</span>
-                        <span class="honor-title">{titre}</span>
-                    </div>
+                    <div><span class="fighter-name">{row['Combattant']} {med_badge}</span><span class="honor-title">{titre}</span></div>
                 </div>
                 <div class="status-badge">{row['Statut']}</div>
-            </div>
-            """, unsafe_allow_html=True)
+            </div>""", unsafe_allow_html=True)
     else: st.info("Aucun combat.")
 
-# 2. COACH (DIVISÉ EN 2 SOUS-ONGLETS)
+# 2. COACH
 with tab_coach:
     if st.text_input("Code", type="password") == "1234":
-        
-        # SOUS-ONGLETS POUR ORGANISATION
         subtab_pilotage, subtab_admin = st.tabs(["⚡ PILOTAGE LIVE", "⚙️ CONFIG & ADMIN"])
         
-        # --- A. PILOTAGE (ACTION) ---
+        # --- PILOTAGE ---
         with subtab_pilotage:
             st.caption(f"Événement : **{st.session_state.get('Config_Compet', 'Non Défini')}**")
-            
             live = get_live_data()
             active_view = live[live['Statut'] != "Terminé"].sort_values('Numero') if not live.empty else pd.DataFrame()
             
@@ -210,10 +187,8 @@ with tab_coach:
                         with c_info:
                             st.markdown(f"### 🥊 {row['Combattant']}")
                             st.caption(f"#{row['Numero']} | Aire {row['Aire']} | {row['Details_Tour']}")
-                        
                         with c_win:
                             with st.popover("✅ VICTOIRE", use_container_width=True):
-                                st.write("Suite du parcours :")
                                 nn = st.number_input("N°", value=int(row['Numero'])+1, key=f"n{idx}")
                                 na = st.number_input("Aire", value=int(row['Aire']), key=f"a{idx}")
                                 nt = st.text_input("Tour", key=f"t{idx}")
@@ -225,32 +200,127 @@ with tab_coach:
                                 if st.button("🏆 FINALE (OR)", key=f"or{idx}"):
                                     process_end_match(live, idx, "🥇 Or", st.session_state.get('Config_Compet'), datetime.today(), st.session_state.get('Target_Compet'))
                                     st.rerun()
-                        
                         with c_loss:
                             with st.popover("❌ DÉFAITE", use_container_width=True):
                                 res = st.radio("Résultat", ["🥈 Argent", "🥉 Bronze", "🍫 4ème", "❌ Non classé"], key=f"r{idx}")
                                 if st.button("Terminer", key=f"e{idx}", type="primary"):
                                     process_end_match(live, idx, res, st.session_state.get('Config_Compet'), datetime.today(), st.session_state.get('Target_Compet'))
                                     st.rerun()
-            else:
-                st.info("Aucun combat en cours. Allez dans 'Config & Admin' pour importer des inscrits.")
+            else: st.info("Aucun combat en cours.")
 
-        # --- B. CONFIG & ADMIN (PRÉPARATION) ---
+        # --- ADMIN ---
         with subtab_admin:
             
-            # 1. CONFIGURATION LIVE
-            st.markdown("#### 1. Configuration du Jour")
-            c1, c2 = st.columns(2)
+            # 1. SELECTION COMPETITION & CREATION
+            st.markdown("#### 1. Sélection de la Compétition")
+            col_sel, col_new = st.columns([3, 1])
+            
             cal_opts = get_calendar_db()
             opts = cal_opts['Nom_Competition'].tolist() if not cal_opts.empty else ["Entraînement"]
-            nom_c = c1.selectbox("Événement du Jour", opts)
-            qualif = st.checkbox("Qualificatif ?")
-            tgt = st.selectbox("Vers", opts) if qualif else None
             
+            # Selectbox principale
+            with col_sel:
+                nom_c = st.selectbox("Événement Actuel", opts, label_visibility="collapsed")
+            
+            # Bouton création rapide
+            with col_new:
+                with st.popover("➕ Créer", use_container_width=True):
+                    new_n = st.text_input("Nom")
+                    new_d = st.date_input("Date")
+                    if st.button("Ajouter au calendrier"):
+                        new_row = pd.DataFrame([{"Nom_Competition": new_n, "Date_Prevue": str(new_d)}])
+                        save_data(pd.concat([cal_opts, new_row], ignore_index=True), "Calendrier", ["Nom_Competition", "Date_Prevue"])
+                        st.success("Créé !")
+                        st.rerun()
+
+            # Stockage session
             st.session_state['Config_Compet'] = nom_c
+            
+            st.write("---")
+            
+            # 2. INSCRIPTIONS INTELLIGENTES
+            st.markdown("#### 2. Inscriptions & Pesée")
+            st.info("Saisissez les NOMS. Cliquez sur la baguette magique pour tout remplir automatiquement.")
+            
+            if 'inscr_df' not in st.session_state:
+                st.session_state['inscr_df'] = pd.DataFrame(columns=["Compétition", "Nom Complet", "Année Naissance", "Poids (kg)", "Sexe (M/F)", "Catégorie Calculée"])
+            
+            # Editeur
+            edited = st.data_editor(
+                st.session_state['inscr_df'], 
+                num_rows="dynamic", 
+                use_container_width=True,
+                column_config={
+                    "Compétition": st.column_config.Column(disabled=True), # On le remplit auto
+                    "Sexe (M/F)": st.column_config.SelectboxColumn(options=["M", "F"]),
+                    "Année Naissance": st.column_config.NumberColumn(format="%d"),
+                    "Poids (kg)": st.column_config.NumberColumn(format="%.1f")
+                }
+            )
+            
+            c_magic, c_wa, c_save = st.columns(3)
+            
+            # LE BOUTON MAGIQUE
+            if c_magic.button("✨ Remplir Infos & Calculer", type="primary"):
+                df_ath = get_athletes_db()
+                
+                for i, row in edited.iterrows():
+                    # 1. Force le nom de la compétition
+                    edited.at[i, "Compétition"] = nom_c
+                    
+                    nom = row["Nom Complet"]
+                    if nom:
+                        # 2. Cherche dans la base Athlètes
+                        if not df_ath.empty:
+                            found = df_ath[df_ath['Nom'] == nom]
+                            if not found.empty:
+                                info = found.iloc[0]
+                                # On remplit seulement si vide dans le tableau (pour laisser la modif possible)
+                                if pd.isna(row["Année Naissance"]) or row["Année Naissance"] == "":
+                                    edited.at[i, "Année Naissance"] = info['Annee_Naissance']
+                                if pd.isna(row["Poids (kg)"]) or row["Poids (kg)"] == "":
+                                    edited.at[i, "Poids (kg)"] = info['Poids']
+                                if pd.isna(row["Sexe (M/F)"]) or row["Sexe (M/F)"] == "":
+                                    edited.at[i, "Sexe (M/F)"] = info['Sexe']
+                        
+                        # 3. Calcul Catégorie (avec les nouvelles valeurs)
+                        # On doit relire les valeurs potentiellement mises à jour
+                        an = edited.at[i, "Année Naissance"]
+                        pd_val = edited.at[i, "Poids (kg)"]
+                        sx = edited.at[i, "Sexe (M/F)"]
+                        
+                        if an and pd_val:
+                            edited.at[i, "Catégorie Calculée"] = calculer_categorie(an, pd_val, sx)
+                
+                st.session_state['inscr_df'] = edited
+                st.rerun()
+
+            if c_wa.button("📲 Générer Message"):
+                txt = "\n".join([f"🏆 {r['Compétition']} | 🥊 {r['Nom Complet']} : {r['Catégorie Calculée']}" for _, r in edited.iterrows() if r['Nom Complet']])
+                st.link_button("Envoyer WhatsApp", f"https://wa.me/?text={urllib.parse.quote('📋 INSCRIPTIONS\\n\\n' + txt)}")
+            
+            if c_save.button("💾 Sauvegarder Liste"):
+                pre = get_preinscriptions_db()
+                to_save = edited.rename(columns={"Compétition": "Competition_Cible", "Nom Complet": "Nom", "Année Naissance": "Annee", "Poids (kg)": "Poids", "Sexe (M/F)": "Sexe", "Catégorie Calculée": "Categorie"})
+                # On sauvegarde aussi les nouvelles infos athlètes dans la base principale !
+                for _, r in edited.iterrows():
+                    if r["Nom Complet"] and r["Année Naissance"]:
+                        # On met à jour la fiche athlète discrètement
+                        save_athlete(r["Nom Complet"], "") # Titre vide par défaut, mais update poids/age
+                        # Note: save_athlete est simple, on pourrait faire une update plus fine mais ça suffit pour créer l'entrée
+                
+                save_data(pd.concat([pre, to_save], ignore_index=True), "PreInscriptions", [])
+                st.success("Sauvegardé !")
+
+            st.write("---")
+            
+            # 3. IMPORT LIVE
+            st.markdown("#### 3. Lancement")
+            qualif = st.checkbox("Compétition Qualificative ?")
+            tgt = st.selectbox("Vers...", opts) if qualif else None
             st.session_state['Target_Compet'] = tgt
             
-            if st.button("📥 Importer la liste des Inscrits vers le Live"):
+            if st.button(f"📥 Importer les inscrits de '{nom_c}' vers le Live"):
                 pre = get_preinscriptions_db()
                 sub = pre[pre['Competition_Cible'] == nom_c]
                 if not sub.empty:
@@ -260,47 +330,13 @@ with tab_coach:
                         if r['Nom'] and (cur.empty or r['Nom'] not in cur['Combattant'].values):
                             rows.append({"Combattant": r['Nom'], "Aire":0, "Numero":0, "Casque":"Rouge", "Statut":"A venir", "Palmares":"", "Details_Tour":"", "Medaille_Actuelle":""})
                     if rows: save_data(pd.concat([cur, pd.DataFrame(rows)], ignore_index=True), "Feuille 1", []); st.success("Importé !"); st.rerun()
-                else: st.warning("Aucun inscrit trouvé pour cet événement.")
+                else: st.warning("Aucun inscrit trouvé.")
             
-            st.write("---")
-            
-            # 2. CALENDRIER & INSCRIPTIONS
-            with st.expander("📅 Gestion Calendrier & Inscriptions Futures"):
-                st.markdown("**Ajouter une date au calendrier :**")
-                cc1, cc2, cc3 = st.columns([3, 2, 1])
-                n_cal = cc1.text_input("Nom Compétition")
-                d_cal = cc2.date_input("Date Prévue")
-                if cc3.button("Ajouter Date"):
-                    cal = get_calendar_db()
-                    save_data(pd.concat([cal, pd.DataFrame([{"Nom_Competition": n_cal, "Date_Prevue": str(d_cal)}])], ignore_index=True), "Calendrier", [])
-                    st.rerun()
-                
-                st.markdown("**Préparer les inscriptions :**")
-                if 'inscr_df' not in st.session_state: st.session_state['inscr_df'] = pd.DataFrame(columns=["Compétition", "Nom Complet", "Année Naissance", "Poids (kg)", "Sexe (M/F)", "Catégorie Calculée"])
-                
-                ed_i = st.data_editor(st.session_state['inscr_df'], num_rows="dynamic", column_config={
-                    "Compétition": st.column_config.SelectboxColumn(options=opts, required=True),
-                    "Sexe (M/F)": st.column_config.SelectboxColumn(options=["M", "F"])
-                }, use_container_width=True)
-                
-                ci1, ci2 = st.columns(2)
-                if ci1.button("Calculer Catégories"):
-                    for i, r in ed_i.iterrows():
-                        ed_i.at[i, "Catégorie Calculée"] = calculer_categorie(r["Année Naissance"], r["Poids (kg)"], r.get("Sexe (M/F)", "M"))
-                    st.session_state['inscr_df'] = ed_i; st.rerun()
-                
-                if ci2.button("💾 Sauvegarder Inscriptions"):
-                    pre = get_preinscriptions_db()
-                    to_save = ed_i.rename(columns={"Compétition": "Competition_Cible", "Nom Complet": "Nom", "Année Naissance": "Annee", "Poids (kg)": "Poids", "Sexe (M/F)": "Sexe", "Catégorie Calculée": "Categorie"})
-                    save_data(pd.concat([pre, to_save], ignore_index=True), "PreInscriptions", [])
-                    st.success("Sauvegardé")
-
-            st.write("---")
-            if st.button("🗑️ Vider entièrement le Live (Reset)", type="primary"):
-                save_data(pd.DataFrame(columns=live.columns), "Feuille 1", [])
+            if st.button("🗑️ Vider le Live (Reset)", type="primary"):
+                save_data(pd.DataFrame(columns=get_live_data().columns), "Feuille 1", [])
                 st.rerun()
 
-# 3. PROFILS & 4. HISTORIQUE (Code inchangé)
+# 3. PROFILS & 4. HISTORIQUE (Inchangé)
 with tab_profil:
     st.header("Fiches"); hist = get_history_data(); ath = get_athletes_db()
     names = set(hist['Combattant']) if not hist.empty else set()

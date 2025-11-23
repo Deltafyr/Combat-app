@@ -6,20 +6,27 @@ from datetime import datetime, date
 import urllib.parse
 
 # --- CONFIGURATION & CSS ---
-st.set_page_config(page_title="Fight Tracker V21", page_icon="🥊", layout="wide")
+st.set_page_config(page_title="Fight Tracker V23", page_icon="🥊", layout="wide")
 
 st.markdown("""
     <style>
         html, body, [class*="css"]  { font-family: 'Roboto', sans-serif; font-size: 14px; }
-        .combat-card { background-color: #1E1E1E; border-radius: 8px; padding: 10px; margin-bottom: 8px; border-left: 4px solid #555; }
+        .combat-card {
+            background-color: #1E1E1E; border-radius: 8px; padding: 10px 14px;
+            margin-bottom: 8px; border-left: 4px solid #555;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        }
         .header-line { display: flex; justify-content: space-between; align-items: baseline; }
         .combat-num { font-style: italic; font-size: 1.1em; color: #ddd; }
+        .tour-info { font-size: 0.85em; color: #aaa; margin-left: 5px; }
         .combat-aire { background: #333; padding: 2px 8px; border-radius: 10px; font-size: 0.85em; font-weight: bold; color: #FFD700; }
+        .fighter-line { margin-top: 5px; }
         .fighter-name { font-size: 1.4em; font-weight: 700; color: #fff; display:block;}
-        .honor-title { font-size: 0.85em; color: #FFD700; font-style: italic; display:block;}
+        .honor-title { font-size: 0.85em; color: #FFD700; font-style: italic; margin-bottom: 4px; display:block;}
         .medal-badge { float:right; font-size: 1.2em; }
-        .gold { background: #FFD700; color:black; padding:2px 6px; border-radius:4px;} 
-        .silver { background: #C0C0C0; color:black; padding:2px 6px; border-radius:4px;}
+        .status-badge { font-size: 0.75em; color: #888; margin-top: 4px; text-transform: uppercase; letter-spacing: 1px;}
+        .medal-pill { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 0.8em; margin-right: 5px; margin-bottom: 5px; color:black;}
+        .gold { background: #FFD700; } .silver { background: #C0C0C0; } .bronze { background: #CD7F32; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -28,13 +35,16 @@ def get_client():
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
     creds_dict = dict(st.secrets["gcp_service_account"])
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-    return gspread.authorize(creds)
+    client = gspread.authorize(creds)
+    return client
 
 # --- LOGIQUE MÉTIER ---
 def calculer_categorie(annee, poids, sexe):
     try:
+        if not annee or not poids: return "Incomplet"
         age = datetime.now().year - int(annee)
         poids = float(poids)
+        
         cat_age = "Inconnu"
         if 7 <= age <= 9: cat_age = "Poussin"
         elif 10 <= age <= 11: cat_age = "Benjamin"
@@ -58,6 +68,7 @@ def calculer_categorie(annee, poids, sexe):
         else:
             for lim in limites:
                 if poids <= lim: cat_poids = f"-{lim}kg"; break
+        
         return f"{cat_age} {sexe} {cat_poids}"
     except: return "?"
 
@@ -137,20 +148,17 @@ def update_athlete_full(nom, titre, annee, poids, sexe):
     sh = client.open("suivi_combats").worksheet("Athletes")
     df = pd.DataFrame(sh.get_all_records())
     
-    # Structure correcte
     expected_cols = ["Nom", "Titre_Honorifique", "Annee_Naissance", "Poids", "Sexe"]
     for c in expected_cols: 
         if c not in df.columns: df[c] = ""
         
     if nom in df['Nom'].values:
-        # Update
         idx = df[df['Nom'] == nom].index[0]
         df.at[idx, "Titre_Honorifique"] = titre
         df.at[idx, "Annee_Naissance"] = annee
         df.at[idx, "Poids"] = poids
         df.at[idx, "Sexe"] = sexe
     else:
-        # Insert
         new_row = pd.DataFrame([{
             "Nom": nom, "Titre_Honorifique": titre, 
             "Annee_Naissance": annee, "Poids": poids, "Sexe": sexe
@@ -261,21 +269,12 @@ with tab_coach:
         if not valid_competitions: valid_competitions = ["Entraînement"]
 
         # --- INSCRIPTIONS ---
-        with st.expander("📝 Inscriptions & Qualifications Auto", expanded=False):
-            st.info("Gérez les inscriptions futures ou récupérez les qualifiés.")
-            
-            # Chargement des pré-inscrits (Qualifiés)
-            df_pre = get_preinscriptions_db()
-            
-            # Fusion avec session state si besoin, ici on travaille direct sur session
+        with st.expander("📝 Préparer Inscriptions", expanded=False):
+            st.info("Saisissez les infos pour générer la liste à envoyer.")
             if 'inscription_df' not in st.session_state:
-                # On charge les préinscriptions existantes s'il y en a
-                if not df_pre.empty:
-                    # Renommage pour matcher l'éditeur
-                    df_pre = df_pre.rename(columns={"Competition_Cible": "Compétition", "Nom": "Nom Complet", "Annee": "Année Naissance", "Poids": "Poids (kg)", "Sexe": "Sexe (M/F)", "Categorie": "Catégorie Calculée"})
-                    st.session_state['inscription_df'] = df_pre
-                else:
-                    st.session_state['inscription_df'] = pd.DataFrame(columns=["Compétition", "Nom Complet", "Année Naissance", "Poids (kg)", "Sexe (M/F)", "Catégorie Calculée"])
+                st.session_state['inscription_df'] = pd.DataFrame(columns=["Compétition", "Nom Complet", "Année Naissance", "Poids (kg)", "Sexe (M/F)", "Catégorie Calculée"])
+            if "Compétition" not in st.session_state['inscription_df'].columns:
+                 st.session_state['inscription_df'].insert(0, "Compétition", "")
 
             edited_inscr = st.data_editor(
                 st.session_state['inscription_df'],
@@ -291,7 +290,7 @@ with tab_coach:
             )
             
             c_calc, c_wa, c_load = st.columns(3)
-            if c_calc.button("🔄 Calculer Catégories"):
+            if c_calc.button("🔄 Calculer"):
                 for idx, row in edited_inscr.iterrows():
                     if row["Année Naissance"] and row["Poids (kg)"]:
                         cat = calculer_categorie(row["Année Naissance"], row["Poids (kg)"], row.get("Sexe (M/F)", "M"))
@@ -305,37 +304,105 @@ with tab_coach:
                 st.link_button("Envoyer", f"https://wa.me/?text={msg}")
             
             if c_load.button("💾 Sauvegarder Liste"):
-                # On sauvegarde dans l'onglet PreInscriptions pour ne pas perdre
-                # Renommage inverse
                 to_save = edited_inscr.rename(columns={"Compétition": "Competition_Cible", "Nom Complet": "Nom", "Année Naissance": "Annee", "Poids (kg)": "Poids", "Sexe (M/F)": "Sexe", "Catégorie Calculée": "Categorie"})
                 save_preinscriptions(to_save)
-                st.success("Liste sauvegardée dans le Cloud !")
+                st.success("Sauvegardé !")
 
         st.divider()
 
-        # --- CONFIGURATION JOUR J ---
-        with st.expander("⚙️ Config Live (Jour J)", expanded=True):
+        # --- MODULE INSCRIPTION CHAMPIONNAT (EX RATTRAPAGE) ---
+        with st.expander("🏆 Inscription Championnat (Via Résultats Passés)", expanded=True):
+            st.warning("Inscrire automatiquement les médaillés d'une compétition passée vers une future.")
+            
+            hist_df = get_history_data()
+            past_compets = hist_df['Competition'].unique().tolist() if not hist_df.empty else []
+            
+            col_src, col_tgt = st.columns(2)
+            source_evt = col_src.selectbox("1. Résultats de :", ["Sélectionner..."] + past_compets)
+            target_evt = col_tgt.selectbox("2. Inscrire à :", ["Sélectionner..."] + valid_competitions)
+            
+            if st.button("🚀 Générer les inscriptions"):
+                if source_evt != "Sélectionner..." and target_evt != "Sélectionner...":
+                    # Filtre : Or et Argent
+                    winners = hist_df[(hist_df['Competition'] == source_evt) & (hist_df['Medaille'].isin(['🥇 Or', '🥈 Argent']))]
+                    
+                    if not winners.empty:
+                        df_ath = get_athletes_db()
+                        df_pre = get_preinscriptions_db()
+                        new_quals = []
+                        count_skipped = 0
+                        
+                        for idx, row in winners.iterrows():
+                            nom = row['Combattant']
+                            
+                            # --- SÉCURITÉ DOUBLON ---
+                            # On vérifie si CE boxeur est DÉJÀ inscrit à CETTE compétition cible
+                            already_exists = False
+                            if not df_pre.empty:
+                                # On cherche la ligne exacte
+                                match = df_pre[
+                                    (df_pre['Nom'] == nom) & 
+                                    (df_pre['Competition_Cible'] == target_evt)
+                                ]
+                                if not match.empty:
+                                    already_exists = True
+                            
+                            if already_exists:
+                                count_skipped += 1
+                                continue # On passe au suivant sans l'ajouter
+                                
+                            # Si pas doublon, on prépare l'ajout
+                            infos = df_ath[df_ath['Nom'] == nom]
+                            if not infos.empty:
+                                info = infos.iloc[0]
+                                cat_auto = calculer_categorie(info['Annee_Naissance'], info['Poids'], info['Sexe'])
+                                new_quals.append({
+                                    "Competition_Cible": target_evt,
+                                    "Nom": nom,
+                                    "Annee": info['Annee_Naissance'],
+                                    "Poids": info['Poids'],
+                                    "Sexe": info['Sexe'],
+                                    "Categorie": cat_auto
+                                })
+                            else:
+                                new_quals.append({"Competition_Cible": target_evt, "Nom": nom, "Annee": "", "Poids": "", "Sexe": "", "Categorie": "A compléter"})
+                        
+                        if new_quals:
+                            full_pre = pd.concat([df_pre, pd.DataFrame(new_quals)], ignore_index=True)
+                            save_preinscriptions(full_pre)
+                            st.success(f"✅ {len(new_quals)} nouveaux inscrits pour '{target_evt}' !")
+                            if count_skipped > 0:
+                                st.info(f"ℹ️ {count_skipped} combattants ignorés car déjà inscrits.")
+                        else:
+                            st.warning("Aucun nouveau combattant à inscrire (tous les médaillés sont déjà dans la liste).")
+                    else:
+                        st.warning("Aucun médaillé Or/Argent trouvé.")
+                else:
+                    st.error("Sélectionnez les compétitions.")
+
+        st.divider()
+
+        # --- CONFIG LIVE ---
+        with st.expander("⚙️ Config Live (Jour J)", expanded=False):
             c1, c2 = st.columns(2)
             nom_compet = c1.selectbox("Sélectionner Événement", valid_competitions)
             date_compet = c2.date_input("Date", st.session_state.get('Config_Date', datetime.today()))
             st.session_state['Config_Compet'] = nom_compet
             st.session_state['Config_Date'] = date_compet
             
-            # OPTION QUALIFICATION
             st.write("---")
-            is_qualif = st.checkbox("⚠️ Cette compétition est qualificative ?")
+            st.write("Qualif Auto (Clôture Live) :")
+            is_qualif = st.checkbox("Cette compétition qualifie pour...")
             target_compet = None
             if is_qualif:
-                target_compet = st.selectbox("Les qualifiés (Or/Argent) iront à :", valid_competitions, index=0)
-                st.info(f"Les 1er et 2ème seront automatiquement ajoutés à la liste pour '{target_compet}'.")
+                target_compet = st.selectbox("Cible", valid_competitions, index=0)
                 st.session_state['Target_Compet'] = target_compet
             else:
                 if 'Target_Compet' in st.session_state: del st.session_state['Target_Compet']
 
             st.write("---")
-            if st.button("📥 Importer Inscrits pour ce Live"):
+            if st.button("📥 Importer Inscrits"):
                 df_pre = get_preinscriptions_db()
-                # On filtre sur le nom de la compet
                 subset = df_pre[df_pre['Competition_Cible'] == nom_compet]
                 if not subset.empty:
                     cur = get_live_data()
@@ -347,7 +414,7 @@ with tab_coach:
                         save_live(pd.concat([cur, pd.DataFrame(rows)], ignore_index=True))
                         st.success("Import réussi !")
                         st.rerun()
-                else: st.warning("Personne inscrit pour cet événement.")
+                else: st.warning("Aucun inscrit.")
 
         st.divider()
 
@@ -378,89 +445,58 @@ with tab_coach:
 
         st.write("---")
         
-        # --- CLÔTURE INTELLIGENTE ---
+        # --- CLÔTURE ---
         if st.button("🏁 CLÔTURER & TRAITER QUALIFICATIONS", type="primary"):
             hist = get_history_data()
-            df_ath = get_athletes_db() # Pour récupérer poids/âge des gagnants
-            df_pre = get_preinscriptions_db() # Pour ajouter les qualifiés
-            
-            new_arch = []
-            new_qualif = []
-            report = []
-            
+            df_ath = get_athletes_db()
+            df_pre = get_preinscriptions_db()
+            new_arch, new_qualif, report = [], [], []
             target_evt = st.session_state.get('Target_Compet')
             
             for i, row in live.iterrows():
                 res = row['Medaille_Actuelle'] if row['Medaille_Actuelle'] else row['Palmares']
                 nom = row['Combattant']
-                
                 if res and nom:
-                    # 1. ARCHIVAGE
                     new_arch.append({"Competition": nom_compet, "Date": str(date_compet), "Combattant": nom, "Medaille": res})
                     report.append(f"{res} {nom}")
-                    
-                    # 2. QUALIFICATION AUTOMATIQUE (Si Or/Argent et Target défini)
                     if target_evt and res in ["🥇 Or", "🥈 Argent"]:
-                        # On cherche les infos de l'athlète dans la base
-                        infos = df_ath[df_ath['Nom'] == nom]
-                        if not infos.empty:
-                            info = infos.iloc[0]
-                            # On calcule la catégorie pour gagner du temps
-                            cat_auto = calculer_categorie(info['Annee_Naissance'], info['Poids'], info['Sexe'])
-                            new_qualif.append({
-                                "Competition_Cible": target_evt,
-                                "Nom": nom,
-                                "Annee": info['Annee_Naissance'],
-                                "Poids": info['Poids'],
-                                "Sexe": info['Sexe'],
-                                "Categorie": cat_auto
-                            })
-                        else:
-                            # Pas d'info ? On inscrit quand même mais vide
-                            new_qualif.append({"Competition_Cible": target_evt, "Nom": nom, "Annee": "", "Poids": "", "Sexe": "", "Categorie": "A compléter"})
+                        # DOUBLON CHECK POUR CLOTURE
+                        exists = False
+                        if not df_pre.empty:
+                            if not df_pre[(df_pre['Nom'] == nom) & (df_pre['Competition_Cible'] == target_evt)].empty:
+                                exists = True
+                        
+                        if not exists:
+                            infos = df_ath[df_ath['Nom'] == nom]
+                            if not infos.empty:
+                                info = infos.iloc[0]
+                                cat_auto = calculer_categorie(info['Annee_Naissance'], info['Poids'], info['Sexe'])
+                                new_qualif.append({"Competition_Cible": target_evt, "Nom": nom, "Annee": info['Annee_Naissance'], "Poids": info['Poids'], "Sexe": info['Sexe'], "Categorie": cat_auto})
+                            else: new_qualif.append({"Competition_Cible": target_evt, "Nom": nom, "Annee": "", "Poids": "", "Sexe": "", "Categorie": "A compléter"})
 
-            # SAUVEGARDE ARCHIVES
             if new_arch:
                 save_history(pd.concat([hist, pd.DataFrame(new_arch)], ignore_index=True))
-                st.success("✅ Résultats archivés.")
-            
-            # SAUVEGARDE QUALIFIÉS
+                st.success("✅ Archivé.")
             if new_qualif:
                 save_preinscriptions(pd.concat([df_pre, pd.DataFrame(new_qualif)], ignore_index=True))
-                st.balloons()
-                st.success(f"🚀 {len(new_qualif)} boxeurs qualifiés automatiquement pour '{target_evt}' !")
+                st.success(f"🚀 {len(new_qualif)} qualifiés !")
             
-            # WHATSAPP
             msg = urllib.parse.quote(f"🏆 *BILAN {nom_compet}*\n\n" + "\n".join(sorted(report)))
             st.link_button("📲 Envoyer Bilan", f"https://wa.me/?text={msg}")
 
         if st.button("🗑️ Vider Live"):
             save_live(pd.DataFrame(columns=live.columns))
-            st.warning("Live vidé.")
+            st.warning("Vidé.")
             st.rerun()
 
-        # --- GESTION ATHLÈTES (Base de données complète) ---
-        with st.expander("👤 Base Athlètes (Pour Qualifications Auto)"):
-            st.info("Remplissez ceci pour que l'inscription automatique fonctionne.")
+        # --- GESTION ATHLÈTES ---
+        with st.expander("👤 Base Athlètes"):
             df_ath = get_athletes_db()
-            
-            # Vérification colonnes
             cols_req = ["Nom", "Titre_Honorifique", "Annee_Naissance", "Poids", "Sexe"]
             for c in cols_req: 
                 if c not in df_ath.columns: df_ath[c] = ""
-            
-            edited_ath = st.data_editor(
-                df_ath, 
-                num_rows="dynamic",
-                column_config={
-                    "Sexe": st.column_config.SelectboxColumn("Sexe", options=["M", "F"]),
-                    "Annee_Naissance": st.column_config.NumberColumn("Année", format="%d"),
-                    "Poids": st.column_config.NumberColumn("Poids", format="%.1f")
-                },
-                key="ath_editor"
-            )
+            edited_ath = st.data_editor(df_ath, num_rows="dynamic", key="ath_editor", column_config={"Sexe": st.column_config.SelectboxColumn("Sexe", options=["M", "F"])})
             if st.button("Sauvegarder Base Athlètes"):
-                # Save raw
                 client = get_client()
                 sh = client.open("suivi_combats").worksheet("Athletes")
                 sh.clear()

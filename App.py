@@ -6,7 +6,7 @@ from datetime import datetime
 import urllib.parse
 
 # --- CONFIGURATION & CSS ---
-st.set_page_config(page_title="Fight Tracker V16", page_icon="🥊", layout="wide")
+st.set_page_config(page_title="Fight Tracker V17", page_icon="🥊", layout="wide")
 
 st.markdown("""
     <style>
@@ -214,16 +214,23 @@ with tab_coach:
     password = st.text_input("🔑 Code", type="password")
     if password == "1234":
         
-        # --- NOUVEAU : MODULE PRÉ-INSCRIPTION ---
+        # --- MODULE PRÉ-INSCRIPTION V2 (AVEC NOM COMPETITION) ---
         with st.expander("📝 Préparer Inscriptions & Catégories", expanded=True):
             st.info("Saisissez les infos pour générer la liste à envoyer.")
+            
+            # Nouvelle structure avec Colonne "Compétition"
             if 'inscription_df' not in st.session_state:
-                st.session_state['inscription_df'] = pd.DataFrame(columns=["Nom Complet", "Année Naissance", "Poids (kg)", "Sexe (M/F)", "Catégorie Calculée"])
+                st.session_state['inscription_df'] = pd.DataFrame(columns=["Compétition", "Nom Complet", "Année Naissance", "Poids (kg)", "Sexe (M/F)", "Catégorie Calculée"])
+            
+            # Vérification migration colonnes si ancien état
+            if "Compétition" not in st.session_state['inscription_df'].columns:
+                 st.session_state['inscription_df'].insert(0, "Compétition", "")
 
             edited_inscr = st.data_editor(
                 st.session_state['inscription_df'],
                 num_rows="dynamic",
                 column_config={
+                    "Compétition": st.column_config.TextColumn("Compétition", width="medium"),
                     "Nom Complet": st.column_config.TextColumn("Nom Prénom", width="medium"),
                     "Année Naissance": st.column_config.NumberColumn("Année", min_value=1950, max_value=2025, step=1, format="%d"),
                     "Poids (kg)": st.column_config.NumberColumn("Poids", min_value=10, max_value=150, step=0.1, format="%.1f"),
@@ -247,11 +254,14 @@ with tab_coach:
                 if not edited_inscr.empty:
                     lines = []
                     for idx, row in edited_inscr.iterrows():
+                        compet_name = row["Compétition"] if row["Compétition"] else "Compétition ?"
                         nom = row["Nom Complet"]
                         cat = row["Catégorie Calculée"] if row["Catégorie Calculée"] else "En attente"
                         poids = row["Poids (kg)"]
                         annee = int(row["Année Naissance"]) if pd.notnull(row["Année Naissance"]) else "?"
-                        lines.append(f"🥊 {nom} ({annee}) : {poids}kg -> *{cat}*")
+                        
+                        # Format du message : [Compet] Nom (Année) : Poids -> Catégorie
+                        lines.append(f"🏆 {compet_name} | 🥊 {nom} ({annee}) : {poids}kg -> *{cat}*")
                     
                     msg_text = "📋 *LISTE INSCRIPTIONS CLUB*\n\n" + "\n".join(lines) + "\n\n🔗 Règles : https://www.lokmda.fr/_media/kickboxing-ages-categories-poids-ffkmda-amateur-2025.pdf"
                     msg_encoded = urllib.parse.quote(msg_text)
@@ -274,6 +284,7 @@ with tab_coach:
                     rows = []
                     for idx, row in st.session_state['inscription_df'].iterrows():
                         name = row["Nom Complet"]
+                        # On importe seulement si le nom n'est pas vide
                         if name and (cur_live.empty or name not in cur_live['Combattant'].values):
                             rows.append({"Combattant": name, "Aire":0, "Numero":0, "Casque":"Rouge", "Statut":"A venir", "Palmares":"", "Details_Tour":"", "Medaille_Actuelle":""})
                     if rows:
@@ -351,7 +362,7 @@ with tab_coach:
                 empty = pd.DataFrame(columns=live_df.columns)
                 save_live_dataframe(empty)
                 if 'wa_link' in st.session_state: del st.session_state['wa_link']
-                st.warning("Live vidé.")
+                st.warning("Liste Live effacée.")
                 st.rerun()
         
         st.divider()

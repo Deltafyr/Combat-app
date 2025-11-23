@@ -3,6 +3,7 @@ import pandas as pd
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
+import urllib.parse # Nécessaire pour WhatsApp
 
 # --- CONFIGURATION & CSS ---
 st.set_page_config(page_title="Fight Tracker Ultimate", page_icon="🥊", layout="wide")
@@ -82,7 +83,7 @@ def save_athlete(nom, titre):
     try: sh = client.open("suivi_combats").worksheet("Athletes")
     except: sh = client.open("suivi_combats").add_worksheet(title="Athletes", rows=100, cols=5)
     
-    # Update or Append logic simplifiée
+    # Update or Append logic
     df = pd.DataFrame(sh.get_all_records())
     if "Nom" not in df.columns: df = pd.DataFrame(columns=["Nom", "Titre_Honorifique"])
     
@@ -109,7 +110,6 @@ with tab_public:
             df['Aire'] = pd.to_numeric(df['Aire'], errors='coerce').fillna(0)
             df_active = df[df['Numero'] > 0].sort_values(by=['Numero', 'Aire'])
             
-            # Affichage Titre Compétition
             titre_compet = st.session_state.get('Config_Compet', "Compétition en cours")
             st.markdown(f"### 📍 {titre_compet}")
 
@@ -176,7 +176,6 @@ with tab_historique:
     st.header("🏛️ Palmarès Global")
     df_hist = get_history_data()
     if not df_hist.empty:
-        # Tableau simple en lecture seule pour le public
         st.dataframe(df_hist.sort_values(by='Date', ascending=False), use_container_width=True, hide_index=True)
     else: st.info("Vide.")
 
@@ -193,7 +192,6 @@ with tab_coach:
             st.session_state['Config_Compet'] = nom_compet
             st.session_state['Config_Date'] = date_compet
             
-            # Init Équipe
             df_athletes = get_athletes_db()
             if not df_athletes.empty:
                 sel_team = st.multiselect("Sélectionner l'équipe du jour", df_athletes['Nom'].unique())
@@ -211,11 +209,10 @@ with tab_coach:
 
         st.divider()
 
-        # --- B. GESTION LIVE & CLÔTURE ---
-        st.subheader("⚡ Gestion & Clôture")
+        # --- B. GESTION LIVE ---
+        st.subheader("⚡ Gestion Live")
         live_df = get_live_data()
         
-        # Outil de mise à jour Live (Wizard)
         active_mask = live_df['Statut'] != "Terminé"
         actives = live_df[active_mask]['Combattant'].tolist()
         if actives:
@@ -226,80 +223,92 @@ with tab_coach:
                 col_a, col_b = st.columns(2)
                 n_num = col_a.number_input("N°", value=int(row['Numero']) if row['Numero'] else 0)
                 n_med = col_b.selectbox("Résultat/Médaille", ["", "🥇 Or", "🥈 Argent", "🥉 Bronze", "🍫 4ème", "❌ Non classé"], index=0)
-                if st.form_submit_button("Mettre à jour"):
+                
+                b_up = st.form_submit_button("✅ Mettre à jour")
+                b_fin = st.form_submit_button("🏁 Terminer & Archiver")
+                
+                if b_up:
                     live_df.at[idx, 'Numero'] = n_num
                     live_df.at[idx, 'Medaille_Actuelle'] = n_med
                     save_live_dataframe(live_df)
                     st.rerun()
+                if b_fin:
+                    live_df.at[idx, 'Statut'] = "Terminé"
+                    live_df.at[idx, 'Medaille_Actuelle'] = n_med
+                    live_df.at[idx, 'Palmares'] = n_med
+                    save_live_dataframe(live_df)
+                    st.toast("Terminé et Archivé localement !")
+                    st.rerun()
         
         st.write("---")
         
-        # CLÔTURE AUTOMATIQUE
+        # --- C. CLÔTURE ET RAPPORT WHATSAPP ---
+        st.subheader("📤 Fin de Journée")
         col_archive, col_clear = st.columns([2, 1])
         
         with col_archive:
-            if st.button("📤 CLÔTURER LA COMPÉTITION (Archiver Résultats)", type="primary"):
-                # 1. On récupère l'historique actuel
+            if st.button("🏁 CLÔTURER & GÉNÉRER LE BILAN", type="primary"):
+                # 1. Archivage Historique
                 hist_df = get_history_data()
-                
-                # 2. On prépare les nouvelles lignes depuis le Live
                 new_archives = []
-                count = 0
+                report_lines = [] # Pour WhatsApp
+                
                 for i, row in live_df.iterrows():
-                    # On archive si y'a une médaille ou un palmarès renseigné
-                    resultat = row['Medaille_Actuelle'] if row['Medaille_Actuelle'] else row['Palmares']
-                    if resultat and row['Combattant']:
-                        new_archives.append({
-                            "Competition": nom_compet,
-                            "Date": str(date_compet),
-                            "Combattant": row['Combattant'],
-                            "Medaille": resultat
-                        })
-                        count += 1
+                    res = row['Medaille_Actuelle'] if row['Medaille_Actuelle'] else row['Palmares']
+                    if res and row['Combattant']:
+                        # Ajout BDD
+                        new_archives.append({"Competition": nom_compet, "Date": str(date_compet), "Combattant": row['Combattant'], "Medaille": res})
+                        # Ajout Rapport WhatsApp
+                        report_lines.append(f"{res} {row['Combattant']}")
                 
                 if new_archives:
+                    # Save DB
                     new_hist_df = pd.concat([hist_df, pd.DataFrame(new_archives)], ignore_index=True)
                     save_history_dataframe(new_hist_df)
-                    st.success(f"✅ {count} résultats archivés dans l'Historique !")
-                    st.balloons()
+                    st.success("✅ Résultats archivés !")
+                    
+                    # 2. Génération Message WhatsApp
+                    # On trie pour mettre l'Or en premier (Ordre alphabétique inversé des médailles marche pas mal, ou manuel)
+                    report_lines.sort() # Simple tri
+                    
+                    msg_text = f"🏆 *RÉSULTATS DU CLUB*\n📍 {nom_compet}\n🗓️ {date_compet}\n\n" + "\n".join(report_lines) + "\n\n🔥 *Bravo à toute l'équipe !*"
+                    msg_encoded = urllib.parse.quote(msg_text)
+                    whatsapp_url = f"https://wa.me/?text={msg_encoded}"
+                    
+                    # On stocke l'URL dans la session pour l'afficher juste après
+                    st.session_state['wa_link'] = whatsapp_url
                 else:
-                    st.warning("Personne n'a de médaille à archiver dans la liste Live.")
+                    st.warning("Aucun résultat à archiver.")
+
+            # Affichage du bouton WhatsApp si le lien existe
+            if 'wa_link' in st.session_state:
+                st.link_button("📲 Envoyer le Bilan sur WhatsApp", st.session_state['wa_link'], type="primary")
 
         with col_clear:
             if st.button("🗑️ Vider le Live"):
                 empty = pd.DataFrame(columns=live_df.columns)
                 save_live_dataframe(empty)
+                if 'wa_link' in st.session_state: del st.session_state['wa_link']
                 st.warning("Liste Live effacée.")
                 st.rerun()
 
         st.divider()
 
-        # --- C. CORRECTION HISTORIQUE (MANUEL) ---
-        with st.expander("📜 Corriger / Modifier l'Historique (Admin)"):
-            st.info("Vous pouvez modifier ici les erreurs passées (ex: mauvaise date, mauvaise médaille).")
+        # --- D. CORRECTIONS ---
+        with st.expander("📜 Corriger l'Historique"):
             full_hist = get_history_data()
-            
-            edited_hist = st.data_editor(
-                full_hist,
-                num_rows="dynamic",
-                use_container_width=True,
-                key="hist_editor"
-            )
-            
-            if st.button("💾 Sauvegarder les corrections d'Historique"):
+            edited_hist = st.data_editor(full_hist, num_rows="dynamic", use_container_width=True, key="hist_editor")
+            if st.button("💾 Sauvegarder Historique"):
                 save_history_dataframe(edited_hist)
-                st.toast("Historique mis à jour !", icon="✅")
                 st.rerun()
                 
-        # --- D. GESTION BIO ATHLETES ---
-        with st.expander("👤 Gestion Titres/Bio"):
+        with st.expander("👤 Gestion Bio Athlètes"):
             df_ath = get_athletes_db()
             edited_ath = st.data_editor(df_ath, num_rows="dynamic", key="ath_editor")
             if st.button("Sauvegarder Athlètes"):
-                # Conversion editor -> sheet
                 client = get_client()
                 try: sh = client.open("suivi_combats").worksheet("Athletes")
                 except: sh = client.open("suivi_combats").add_worksheet(title="Athletes", rows=100, cols=5)
                 sh.clear()
                 sh.update([edited_ath.columns.values.tolist()] + edited_ath.values.tolist())
-                st.success("Base Athlètes mise à jour")
+                st.success("OK")

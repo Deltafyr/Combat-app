@@ -2,11 +2,11 @@ import streamlit as st
 import pandas as pd
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-from datetime import datetime
+from datetime import datetime, date
 import urllib.parse
 
 # --- CONFIGURATION & CSS ---
-st.set_page_config(page_title="Fight Tracker V17", page_icon="🥊", layout="wide")
+st.set_page_config(page_title="Fight Tracker V20", page_icon="🥊", layout="wide")
 
 st.markdown("""
     <style>
@@ -38,13 +38,12 @@ def get_client():
     client = gspread.authorize(creds)
     return client
 
-# --- LOGIQUE FFKMDA ---
+# --- LOGIQUE METIER ---
 def calculer_categorie(annee_naissance, poids, sexe):
     try:
         annee_actuelle = datetime.now().year
         age = annee_actuelle - int(annee_naissance)
         poids = float(poids)
-        
         cat_age = "Inconnu"
         if 7 <= age <= 9: cat_age = "Poussin"
         elif 10 <= age <= 11: cat_age = "Benjamin"
@@ -65,22 +64,15 @@ def calculer_categorie(annee_naissance, poids, sexe):
         
         cat_poids = "Hors cat."
         found = False
-        if limites and poids > limites[-1]:
-            cat_poids = f"+{limites[-1]}kg"
-            found = True
+        if limites and poids > limites[-1]: cat_poids = f"+{limites[-1]}kg"; found = True
         else:
             for lim in limites:
-                if poids <= lim:
-                    cat_poids = f"-{lim}kg"
-                    found = True
-                    break
-        
+                if poids <= lim: cat_poids = f"-{lim}kg"; found = True; break
         if not found and not limites: cat_poids = f"{poids}kg (Cat?)"
         return f"{cat_age} {sexe} {cat_poids}"
-    except:
-        return "Erreur Données"
+    except: return "Erreur Données"
 
-# --- LECTURE/ECRITURE DONNÉES ---
+# --- GESTION BDD ---
 def get_live_data():
     client = get_client()
     sh = client.open("suivi_combats").sheet1
@@ -104,6 +96,31 @@ def get_athletes_db():
         return pd.DataFrame(sh.get_all_records())
     except: return pd.DataFrame(columns=["Nom", "Titre_Honorifique"])
 
+def get_calendar_db():
+    try:
+        client = get_client()
+        sh = client.open("suivi_combats").worksheet("Calendrier")
+        return pd.DataFrame(sh.get_all_records())
+    except: return pd.DataFrame(columns=["Nom_Competition", "Date_Prevue"])
+
+def get_valid_competitions():
+    """Renvoie la liste des compétitions futures ou du jour"""
+    df = get_calendar_db()
+    valid_list = []
+    today = date.today()
+    
+    if not df.empty:
+        for i, row in df.iterrows():
+            try:
+                date_obj = datetime.strptime(str(row['Date_Prevue']), "%Y-%m-%d").date()
+                # On garde si la date est aujourd'hui ou dans le futur
+                if date_obj >= today:
+                    valid_list.append(row['Nom_Competition'])
+            except:
+                continue # Erreur de date, on ignore
+    return valid_list
+
+# --- SAUVEGARDES ---
 def save_live_dataframe(df):
     client = get_client()
     sh = client.open("suivi_combats").sheet1
@@ -114,6 +131,13 @@ def save_history_dataframe(df):
     client = get_client()
     try: sh = client.open("suivi_combats").worksheet("Historique")
     except: sh = client.open("suivi_combats").add_worksheet(title="Historique", rows=1000, cols=4)
+    sh.clear()
+    sh.update([df.columns.values.tolist()] + df.values.tolist())
+
+def save_calendar_dataframe(df):
+    client = get_client()
+    try: sh = client.open("suivi_combats").worksheet("Calendrier")
+    except: sh = client.open("suivi_combats").add_worksheet(title="Calendrier", rows=100, cols=2)
     sh.clear()
     sh.update([df.columns.values.tolist()] + df.values.tolist())
 
@@ -149,7 +173,6 @@ with tab_public:
                 if row['Statut'] != "Terminé":
                     icon_casque = "🔴" if row['Casque'] == "Rouge" else "🔵"
                     border = "#FF4B4B" if "En cours" in row['Statut'] else "#444"
-                    
                     titre = ""
                     if not df_athletes.empty:
                         infos = df_athletes[df_athletes['Nom'] == row['Combattant']]
@@ -214,15 +237,48 @@ with tab_coach:
     password = st.text_input("🔑 Code", type="password")
     if password == "1234":
         
-        # --- MODULE PRÉ-INSCRIPTION V2 (AVEC NOM COMPETITION) ---
-        with st.expander("📝 Préparer Inscriptions & Catégories", expanded=True):
+        # --- SECTION 0 : CALENDRIER SAISON (NOUVEAU) ---
+        with st.expander("📅 Programmation Saison (Calendrier)", expanded=True):
+            st.info("Ajoutez ici les compétitions futures. Elles apparaîtront dans les listes déroulantes.")
+            
+            # Formulaire ajout
+            c_cal1, c_cal2, c_cal3 = st.columns([3, 2, 1])
+            new_cal_name = c_cal1.text_input("Nom Compétition")
+            new_cal_date = c_cal2.date_input("Date Prévue")
+            
+            if c_cal3.button("Ajouter Date"):
+                if new_cal_name:
+                    cal_df = get_calendar_db()
+                    new_event = pd.DataFrame([{"Nom_Competition": new_cal_name, "Date_Prevue": str(new_cal_date)}])
+                    if cal_df.empty: final_cal = new_event
+                    else: final_cal = pd.concat([cal_df, new_event], ignore_index=True)
+                    save_calendar_dataframe(final_cal)
+                    st.success("Date ajoutée !")
+                    st.rerun()
+            
+            # Affichage tableau calendrier (pour supprimer si besoin)
+            st.write("---")
+            cal_df_view = get_calendar_db()
+            if not cal_df_view.empty:
+                edited_cal = st.data_editor(cal_df_view, num_rows="dynamic", key="cal_editor")
+                if st.button("💾 Sauvegarder Calendrier"):
+                    save_calendar_dataframe(edited_cal)
+                    st.rerun()
+
+        st.divider()
+        
+        # Récupération liste active pour les menus déroulants
+        valid_competitions = get_valid_competitions()
+        if not valid_competitions: valid_competitions = ["Entraînement / Autre"]
+
+        # --- SECTION 1 : PRÉPARATION INSCRIPTIONS ---
+        with st.expander("📝 Préparer Inscriptions & Catégories", expanded=False):
             st.info("Saisissez les infos pour générer la liste à envoyer.")
             
-            # Nouvelle structure avec Colonne "Compétition"
             if 'inscription_df' not in st.session_state:
                 st.session_state['inscription_df'] = pd.DataFrame(columns=["Compétition", "Nom Complet", "Année Naissance", "Poids (kg)", "Sexe (M/F)", "Catégorie Calculée"])
             
-            # Vérification migration colonnes si ancien état
+            # On s'assure que la colonne Compétition existe
             if "Compétition" not in st.session_state['inscription_df'].columns:
                  st.session_state['inscription_df'].insert(0, "Compétition", "")
 
@@ -230,7 +286,8 @@ with tab_coach:
                 st.session_state['inscription_df'],
                 num_rows="dynamic",
                 column_config={
-                    "Compétition": st.column_config.TextColumn("Compétition", width="medium"),
+                    # LISTE DEROULANTE ISSUE DU CALENDRIER
+                    "Compétition": st.column_config.SelectboxColumn("Compétition", options=valid_competitions, required=True, width="medium"),
                     "Nom Complet": st.column_config.TextColumn("Nom Prénom", width="medium"),
                     "Année Naissance": st.column_config.NumberColumn("Année", min_value=1950, max_value=2025, step=1, format="%d"),
                     "Poids (kg)": st.column_config.NumberColumn("Poids", min_value=10, max_value=150, step=0.1, format="%.1f"),
@@ -242,7 +299,7 @@ with tab_coach:
             )
             
             col_calc, col_wa = st.columns(2)
-            if col_calc.button("🔄 Calculer les Catégories FFKMDA"):
+            if col_calc.button("🔄 Calculer les Catégories"):
                 for idx, row in edited_inscr.iterrows():
                     if row["Année Naissance"] and row["Poids (kg)"]:
                         cat = calculer_categorie(row["Année Naissance"], row["Poids (kg)"], row.get("Sexe (M/F)", "M"))
@@ -254,51 +311,61 @@ with tab_coach:
                 if not edited_inscr.empty:
                     lines = []
                     for idx, row in edited_inscr.iterrows():
-                        compet_name = row["Compétition"] if row["Compétition"] else "Compétition ?"
+                        compet_name = row["Compétition"] if row["Compétition"] else "?"
                         nom = row["Nom Complet"]
                         cat = row["Catégorie Calculée"] if row["Catégorie Calculée"] else "En attente"
                         poids = row["Poids (kg)"]
-                        annee = int(row["Année Naissance"]) if pd.notnull(row["Année Naissance"]) else "?"
-                        
-                        # Format du message : [Compet] Nom (Année) : Poids -> Catégorie
-                        lines.append(f"🏆 {compet_name} | 🥊 {nom} ({annee}) : {poids}kg -> *{cat}*")
-                    
-                    msg_text = "📋 *LISTE INSCRIPTIONS CLUB*\n\n" + "\n".join(lines) + "\n\n🔗 Règles : https://www.lokmda.fr/_media/kickboxing-ages-categories-poids-ffkmda-amateur-2025.pdf"
+                        lines.append(f"🏆 {compet_name} | 🥊 {nom} : {poids}kg -> *{cat}*")
+                    msg_text = "📋 *LISTE INSCRIPTIONS CLUB*\n\n" + "\n".join(lines)
                     msg_encoded = urllib.parse.quote(msg_text)
                     st.link_button("Envoyer sur WhatsApp", f"https://wa.me/?text={msg_encoded}", type="primary")
-                else: st.warning("Le tableau est vide.")
+                else: st.warning("Tableau vide.")
 
         st.divider()
 
-        # --- CONFIGURATION COMPETITION LIVE ---
+        # --- SECTION 2 : CONFIG LIVE ---
         with st.expander("⚙️ Configuration Compétition du Jour", expanded=False):
             c1, c2 = st.columns(2)
-            nom_compet = c1.text_input("Nom Événement", value=st.session_state.get('Config_Compet', "Open AURA 2025"))
+            
+            # SELECTBOX DYNAMIQUE CALENDRIER
+            nom_compet_select = c1.selectbox("Sélectionner Événement du Jour", valid_competitions, index=0)
             date_compet = c2.date_input("Date", st.session_state.get('Config_Date', datetime.today()))
-            st.session_state['Config_Compet'] = nom_compet
+            
+            # Mise à jour Session
+            st.session_state['Config_Compet'] = nom_compet_select
             st.session_state['Config_Date'] = date_compet
             
-            if st.button("📥 Importer les Noms de la Liste d'Inscription vers le Live"):
-                if 'inscription_df' in st.session_state and not st.session_state['inscription_df'].empty:
-                    cur_live = get_live_data()
-                    rows = []
-                    for idx, row in st.session_state['inscription_df'].iterrows():
-                        name = row["Nom Complet"]
-                        # On importe seulement si le nom n'est pas vide
-                        if name and (cur_live.empty or name not in cur_live['Combattant'].values):
-                            rows.append({"Combattant": name, "Aire":0, "Numero":0, "Casque":"Rouge", "Statut":"A venir", "Palmares":"", "Details_Tour":"", "Medaille_Actuelle":""})
-                    if rows:
-                        final = pd.concat([cur_live, pd.DataFrame(rows)], ignore_index=True)
-                        save_live_dataframe(final)
-                        st.success("Ajoutés au Live !")
-                        st.rerun()
+            st.write("---")
+            st.write("#### 📥 Importer depuis la liste d'inscription")
+            
+            if 'inscription_df' in st.session_state and not st.session_state['inscription_df'].empty:
+                # On cherche les gens inscrits à CETTE compétition sélectionnée
+                subset = st.session_state['inscription_df'][st.session_state['inscription_df']['Compétition'] == nom_compet_select]
+                
+                if not subset.empty:
+                    st.info(f"{len(subset)} combattants trouvés pour '{nom_compet_select}'")
+                    if st.button(f"Importer ces {len(subset)} combattants dans le Live"):
+                        cur_live = get_live_data()
+                        rows = []
+                        for idx, row in subset.iterrows():
+                            name = row["Nom Complet"]
+                            if name and (cur_live.empty or name not in cur_live['Combattant'].values):
+                                rows.append({"Combattant": name, "Aire":0, "Numero":0, "Casque":"Rouge", "Statut":"A venir", "Palmares":"", "Details_Tour":"", "Medaille_Actuelle":""})
+                        if rows:
+                            final = pd.concat([cur_live, pd.DataFrame(rows)], ignore_index=True)
+                            save_live_dataframe(final)
+                            st.success("Import réussi !")
+                            st.rerun()
+                else:
+                    st.warning(f"Aucun inscrit trouvé pour '{nom_compet_select}' dans votre tableau d'inscription.")
+            else:
+                st.caption("Remplissez le tableau d'inscription d'abord.")
 
         st.divider()
 
-        # --- GESTION LIVE ---
+        # --- SECTION 3 : GESTION LIVE ---
         st.subheader("⚡ Gestion Live")
         live_df = get_live_data()
-        
         active_mask = live_df['Statut'] != "Terminé"
         actives = live_df[active_mask]['Combattant'].tolist()
         if actives:
@@ -309,10 +376,8 @@ with tab_coach:
                 col_a, col_b = st.columns(2)
                 n_num = col_a.number_input("N°", value=int(row['Numero']) if row['Numero'] else 0)
                 n_med = col_b.selectbox("Résultat/Médaille", ["", "🥇 Or", "🥈 Argent", "🥉 Bronze", "🍫 4ème", "❌ Non classé"], index=0)
-                
                 b_up = st.form_submit_button("✅ Mettre à jour")
                 b_fin = st.form_submit_button("🏁 Terminer & Archiver")
-                
                 if b_up:
                     live_df.at[idx, 'Numero'] = n_num
                     live_df.at[idx, 'Medaille_Actuelle'] = n_med
@@ -323,7 +388,7 @@ with tab_coach:
                     live_df.at[idx, 'Medaille_Actuelle'] = n_med
                     live_df.at[idx, 'Palmares'] = n_med
                     save_live_dataframe(live_df)
-                    st.toast("Terminé et Archivé !")
+                    st.toast("Terminé !")
                     st.rerun()
         
         st.write("---")
@@ -337,11 +402,14 @@ with tab_coach:
                 hist_df = get_history_data()
                 new_archives = []
                 report_lines = []
+                # On utilise la compétition configurée en haut
+                final_compet_name = st.session_state.get('Config_Compet', "Compétition")
+                final_date = st.session_state.get('Config_Date', datetime.today())
                 
                 for i, row in live_df.iterrows():
                     res = row['Medaille_Actuelle'] if row['Medaille_Actuelle'] else row['Palmares']
                     if res and row['Combattant']:
-                        new_archives.append({"Competition": nom_compet, "Date": str(date_compet), "Combattant": row['Combattant'], "Medaille": res})
+                        new_archives.append({"Competition": final_compet_name, "Date": str(final_date), "Combattant": row['Combattant'], "Medaille": res})
                         report_lines.append(f"{res} {row['Combattant']}")
                 
                 if new_archives:
@@ -349,7 +417,7 @@ with tab_coach:
                     save_history_dataframe(new_hist_df)
                     st.success("✅ Résultats archivés !")
                     report_lines.sort()
-                    msg_text = f"🏆 *RÉSULTATS DU CLUB*\n📍 {nom_compet}\n🗓️ {date_compet}\n\n" + "\n".join(report_lines) + "\n\n🔥 *Bravo à toute l'équipe !*"
+                    msg_text = f"🏆 *RÉSULTATS DU CLUB*\n📍 {final_compet_name}\n🗓️ {final_date}\n\n" + "\n".join(report_lines) + "\n\n🔥 *Bravo à toute l'équipe !*"
                     msg_encoded = urllib.parse.quote(msg_text)
                     st.session_state['wa_link'] = f"https://wa.me/?text={msg_encoded}"
                 else: st.warning("Rien à archiver.")
@@ -367,15 +435,14 @@ with tab_coach:
         
         st.divider()
 
-        # --- CORRECTIONS ---
-        with st.expander("📜 Corriger l'Historique"):
+        # --- ADMIN ---
+        with st.expander("🛠️ Outils Admin (Historique/Bio)"):
             full_hist = get_history_data()
             edited_hist = st.data_editor(full_hist, num_rows="dynamic", use_container_width=True, key="hist_editor")
             if st.button("💾 Sauvegarder Historique"):
                 save_history_dataframe(edited_hist)
                 st.rerun()
-                
-        with st.expander("👤 Gestion Bio Athlètes"):
+            st.write("---")
             df_ath = get_athletes_db()
             edited_ath = st.data_editor(df_ath, num_rows="dynamic", key="ath_editor")
             if st.button("Sauvegarder Athlètes"):

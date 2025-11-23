@@ -38,16 +38,13 @@ def get_client():
     client = gspread.authorize(creds)
     return client
 
-# --- LOGIQUE FFKMDA (INTELLIGENCE CATÉGORIES) ---
+# --- LOGIQUE FFKMDA ---
 def calculer_categorie(annee_naissance, poids, sexe):
-    """Détermine la catégorie d'âge et de poids selon règles standard FFKMDA"""
     try:
         annee_actuelle = datetime.now().year
-        # Pour la saison 2024/2025, on base souvent l'âge sur l'année civile
         age = annee_actuelle - int(annee_naissance)
         poids = float(poids)
         
-        # 1. DÉTERMINATION AGE
         cat_age = "Inconnu"
         if 7 <= age <= 9: cat_age = "Poussin"
         elif 10 <= age <= 11: cat_age = "Benjamin"
@@ -57,25 +54,17 @@ def calculer_categorie(annee_naissance, poids, sexe):
         elif 18 <= age <= 40: cat_age = "Senior"
         elif age >= 41: cat_age = "Vétéran"
         
-        # 2. DÉTERMINATION POIDS (Approximation Light Contact / Kick Light standard)
         limites = []
-        
         if cat_age == "Poussin": limites = [23, 28, 32, 37, 42, 47]
         elif cat_age == "Benjamin": limites = [28, 32, 37, 42, 47, 52]
         elif cat_age == "Minime": limites = [32, 37, 42, 47, 52, 57, 63, 69]
         elif cat_age == "Cadet": limites = [32, 37, 42, 47, 52, 57, 63, 69, 74]
-        
         elif cat_age in ["Junior", "Senior", "Vétéran"]:
-            if sexe == "F": # Femmes
-                limites = [48, 52, 56, 60, 65, 70] # +70
-            else: # Hommes
-                limites = [57, 63, 69, 74, 79, 84, 89, 94] # +94
+            if sexe == "F": limites = [48, 52, 56, 60, 65, 70]
+            else: limites = [57, 63, 69, 74, 79, 84, 89, 94]
         
-        # Trouve la limite sup
         cat_poids = "Hors cat."
         found = False
-        
-        # Gestion des poids lourds (au dessus du max)
         if limites and poids > limites[-1]:
             cat_poids = f"+{limites[-1]}kg"
             found = True
@@ -87,9 +76,7 @@ def calculer_categorie(annee_naissance, poids, sexe):
                     break
         
         if not found and not limites: cat_poids = f"{poids}kg (Cat?)"
-            
         return f"{cat_age} {sexe} {cat_poids}"
-        
     except:
         return "Erreur Données"
 
@@ -163,10 +150,10 @@ with tab_public:
                     icon_casque = "🔴" if row['Casque'] == "Rouge" else "🔵"
                     border = "#FF4B4B" if "En cours" in row['Statut'] else "#444"
                     
-                    titre_honorifique = ""
+                    titre = ""
                     if not df_athletes.empty:
                         infos = df_athletes[df_athletes['Nom'] == row['Combattant']]
-                        if not infos.empty: titre_honorifique = infos.iloc[0]['Titre_Honorifique']
+                        if not infos.empty: titre = infos.iloc[0]['Titre_Honorifique']
 
                     st.markdown(f"""
                     <div class="combat-card" style="border-left: 4px solid {border};">
@@ -176,7 +163,7 @@ with tab_public:
                         </div>
                         <div class="fighter-line">
                             <span class="fighter-name">{icon_casque} {row['Combattant']} <span class="medal-badge">{row['Medaille_Actuelle']}</span></span>
-                            <span class="honor-title">{titre_honorifique}</span>
+                            <span class="honor-title">{titre}</span>
                         </div>
                         <div class="status-badge">{row['Statut']}</div>
                     </div>
@@ -198,4 +185,192 @@ with tab_profil:
             infos = df_athletes[df_athletes['Nom'] == search]
             if not infos.empty: bio = infos.iloc[0]['Titre_Honorifique']
         st.markdown(f"## {search}")
-        if
+        if bio: st.markdown(f"**⭐ {bio}**")
+        st.divider()
+        if not df_hist.empty:
+            my_hist = df_hist[df_hist['Combattant'] == search]
+            if not my_hist.empty:
+                for i, row in my_hist.iterrows():
+                    med = row['Medaille']
+                    css = "gold" if "Or" in med else "silver" if "Argent" in med else "bronze" if "Bronze" in med else ""
+                    st.markdown(f"""
+                    <div style="border-bottom:1px solid #333; padding:5px;">
+                        <span class="medal-pill {css}">{med}</span>
+                        <strong>{row['Competition']}</strong> <span style="color:#888;">({row['Date']})</span>
+                    </div>""", unsafe_allow_html=True)
+            else: st.info("Pas d'historique.")
+    else: st.info("Base vide.")
+
+# 3. HISTORIQUE
+with tab_historique:
+    st.header("🏛️ Palmarès Global")
+    df_hist = get_history_data()
+    if not df_hist.empty:
+        st.dataframe(df_hist.sort_values(by='Date', ascending=False), use_container_width=True, hide_index=True)
+    else: st.info("Vide.")
+
+# 4. COACH
+with tab_coach:
+    password = st.text_input("🔑 Code", type="password")
+    if password == "1234":
+        
+        # --- NOUVEAU : MODULE PRÉ-INSCRIPTION ---
+        with st.expander("📝 Préparer Inscriptions & Catégories", expanded=True):
+            st.info("Saisissez les infos pour générer la liste à envoyer.")
+            if 'inscription_df' not in st.session_state:
+                st.session_state['inscription_df'] = pd.DataFrame(columns=["Nom Complet", "Année Naissance", "Poids (kg)", "Sexe (M/F)", "Catégorie Calculée"])
+
+            edited_inscr = st.data_editor(
+                st.session_state['inscription_df'],
+                num_rows="dynamic",
+                column_config={
+                    "Nom Complet": st.column_config.TextColumn("Nom Prénom", width="medium"),
+                    "Année Naissance": st.column_config.NumberColumn("Année", min_value=1950, max_value=2025, step=1, format="%d"),
+                    "Poids (kg)": st.column_config.NumberColumn("Poids", min_value=10, max_value=150, step=0.1, format="%.1f"),
+                    "Sexe (M/F)": st.column_config.SelectboxColumn("Sexe", options=["M", "F"], required=True),
+                    "Catégorie Calculée": st.column_config.TextColumn("Catégorie (Auto)", disabled=True)
+                },
+                use_container_width=True,
+                key="editor_inscr"
+            )
+            
+            col_calc, col_wa = st.columns(2)
+            if col_calc.button("🔄 Calculer les Catégories FFKMDA"):
+                for idx, row in edited_inscr.iterrows():
+                    if row["Année Naissance"] and row["Poids (kg)"]:
+                        cat = calculer_categorie(row["Année Naissance"], row["Poids (kg)"], row.get("Sexe (M/F)", "M"))
+                        edited_inscr.at[idx, "Catégorie Calculée"] = cat
+                st.session_state['inscription_df'] = edited_inscr
+                st.rerun()
+
+            if col_wa.button("📲 Générer Message Inscription"):
+                if not edited_inscr.empty:
+                    lines = []
+                    for idx, row in edited_inscr.iterrows():
+                        nom = row["Nom Complet"]
+                        cat = row["Catégorie Calculée"] if row["Catégorie Calculée"] else "En attente"
+                        poids = row["Poids (kg)"]
+                        annee = int(row["Année Naissance"]) if pd.notnull(row["Année Naissance"]) else "?"
+                        lines.append(f"🥊 {nom} ({annee}) : {poids}kg -> *{cat}*")
+                    
+                    msg_text = "📋 *LISTE INSCRIPTIONS CLUB*\n\n" + "\n".join(lines) + "\n\n🔗 Règles : https://www.lokmda.fr/_media/kickboxing-ages-categories-poids-ffkmda-amateur-2025.pdf"
+                    msg_encoded = urllib.parse.quote(msg_text)
+                    st.link_button("Envoyer sur WhatsApp", f"https://wa.me/?text={msg_encoded}", type="primary")
+                else: st.warning("Le tableau est vide.")
+
+        st.divider()
+
+        # --- CONFIGURATION COMPETITION LIVE ---
+        with st.expander("⚙️ Configuration Compétition du Jour", expanded=False):
+            c1, c2 = st.columns(2)
+            nom_compet = c1.text_input("Nom Événement", value=st.session_state.get('Config_Compet', "Open AURA 2025"))
+            date_compet = c2.date_input("Date", st.session_state.get('Config_Date', datetime.today()))
+            st.session_state['Config_Compet'] = nom_compet
+            st.session_state['Config_Date'] = date_compet
+            
+            if st.button("📥 Importer les Noms de la Liste d'Inscription vers le Live"):
+                if 'inscription_df' in st.session_state and not st.session_state['inscription_df'].empty:
+                    cur_live = get_live_data()
+                    rows = []
+                    for idx, row in st.session_state['inscription_df'].iterrows():
+                        name = row["Nom Complet"]
+                        if name and (cur_live.empty or name not in cur_live['Combattant'].values):
+                            rows.append({"Combattant": name, "Aire":0, "Numero":0, "Casque":"Rouge", "Statut":"A venir", "Palmares":"", "Details_Tour":"", "Medaille_Actuelle":""})
+                    if rows:
+                        final = pd.concat([cur_live, pd.DataFrame(rows)], ignore_index=True)
+                        save_live_dataframe(final)
+                        st.success("Ajoutés au Live !")
+                        st.rerun()
+
+        st.divider()
+
+        # --- GESTION LIVE ---
+        st.subheader("⚡ Gestion Live")
+        live_df = get_live_data()
+        
+        active_mask = live_df['Statut'] != "Terminé"
+        actives = live_df[active_mask]['Combattant'].tolist()
+        if actives:
+            sel_boxer = st.selectbox("Boxeur en cours", actives)
+            idx = live_df[live_df['Combattant'] == sel_boxer].index[0]
+            row = live_df.iloc[idx]
+            with st.form("upd"):
+                col_a, col_b = st.columns(2)
+                n_num = col_a.number_input("N°", value=int(row['Numero']) if row['Numero'] else 0)
+                n_med = col_b.selectbox("Résultat/Médaille", ["", "🥇 Or", "🥈 Argent", "🥉 Bronze", "🍫 4ème", "❌ Non classé"], index=0)
+                
+                b_up = st.form_submit_button("✅ Mettre à jour")
+                b_fin = st.form_submit_button("🏁 Terminer & Archiver")
+                
+                if b_up:
+                    live_df.at[idx, 'Numero'] = n_num
+                    live_df.at[idx, 'Medaille_Actuelle'] = n_med
+                    save_live_dataframe(live_df)
+                    st.rerun()
+                if b_fin:
+                    live_df.at[idx, 'Statut'] = "Terminé"
+                    live_df.at[idx, 'Medaille_Actuelle'] = n_med
+                    live_df.at[idx, 'Palmares'] = n_med
+                    save_live_dataframe(live_df)
+                    st.toast("Terminé et Archivé !")
+                    st.rerun()
+        
+        st.write("---")
+        
+        # --- CLÔTURE ---
+        st.subheader("📤 Fin de Journée")
+        col_archive, col_clear = st.columns([2, 1])
+        
+        with col_archive:
+            if st.button("🏁 CLÔTURER & GÉNÉRER LE BILAN", type="primary"):
+                hist_df = get_history_data()
+                new_archives = []
+                report_lines = []
+                
+                for i, row in live_df.iterrows():
+                    res = row['Medaille_Actuelle'] if row['Medaille_Actuelle'] else row['Palmares']
+                    if res and row['Combattant']:
+                        new_archives.append({"Competition": nom_compet, "Date": str(date_compet), "Combattant": row['Combattant'], "Medaille": res})
+                        report_lines.append(f"{res} {row['Combattant']}")
+                
+                if new_archives:
+                    new_hist_df = pd.concat([hist_df, pd.DataFrame(new_archives)], ignore_index=True)
+                    save_history_dataframe(new_hist_df)
+                    st.success("✅ Résultats archivés !")
+                    report_lines.sort()
+                    msg_text = f"🏆 *RÉSULTATS DU CLUB*\n📍 {nom_compet}\n🗓️ {date_compet}\n\n" + "\n".join(report_lines) + "\n\n🔥 *Bravo à toute l'équipe !*"
+                    msg_encoded = urllib.parse.quote(msg_text)
+                    st.session_state['wa_link'] = f"https://wa.me/?text={msg_encoded}"
+                else: st.warning("Rien à archiver.")
+
+            if 'wa_link' in st.session_state:
+                st.link_button("📲 Envoyer le Bilan sur WhatsApp", st.session_state['wa_link'], type="primary")
+
+        with col_clear:
+            if st.button("🗑️ Vider le Live"):
+                empty = pd.DataFrame(columns=live_df.columns)
+                save_live_dataframe(empty)
+                if 'wa_link' in st.session_state: del st.session_state['wa_link']
+                st.warning("Live vidé.")
+                st.rerun()
+        
+        st.divider()
+
+        # --- CORRECTIONS ---
+        with st.expander("📜 Corriger l'Historique"):
+            full_hist = get_history_data()
+            edited_hist = st.data_editor(full_hist, num_rows="dynamic", use_container_width=True, key="hist_editor")
+            if st.button("💾 Sauvegarder Historique"):
+                save_history_dataframe(edited_hist)
+                st.rerun()
+                
+        with st.expander("👤 Gestion Bio Athlètes"):
+            df_ath = get_athletes_db()
+            edited_ath = st.data_editor(df_ath, num_rows="dynamic", key="ath_editor")
+            if st.button("Sauvegarder Athlètes"):
+                client = get_client()
+                try: sh = client.open("suivi_combats").worksheet("Athletes")
+                except: sh = client.open("suivi_combats").add_worksheet(title="Athletes", rows=100, cols=5)
+                sh.clear()
+                sh.update([edited_ath.columns.values.tolist()] + edited_ath.values.tolist())
+                st.success("OK")

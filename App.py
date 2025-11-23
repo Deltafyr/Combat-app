@@ -6,7 +6,7 @@ from datetime import datetime, date
 import urllib.parse
 
 # --- CONFIGURATION & CSS ---
-st.set_page_config(page_title="Fight Tracker V23", page_icon="🥊", layout="wide")
+st.set_page_config(page_title="Fight Tracker V23 Stable", page_icon="🥊", layout="wide")
 
 st.markdown("""
     <style>
@@ -31,7 +31,9 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- CONNEXION ---
+@st.cache_resource
 def get_client():
+    # Utilisation du cache pour éviter de reconnecter à chaque clic (économise le quota)
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
     creds_dict = dict(st.secrets["gcp_service_account"])
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
@@ -72,39 +74,51 @@ def calculer_categorie(annee, poids, sexe):
         return f"{cat_age} {sexe} {cat_poids}"
     except: return "?"
 
-# --- GESTION BDD ---
-def get_live_data():
+# --- GESTION BDD ROBUSTE (CORRECTION ERREUR API) ---
+def get_worksheet_safe(worksheet_name, cols_expected):
+    """Fonction utilitaire pour ouvrir un onglet sans planter"""
     client = get_client()
-    sh = client.open("suivi_combats").sheet1
-    df = pd.DataFrame(sh.get_all_records())
-    cols = ["Combattant", "Aire", "Numero", "Casque", "Statut", "Palmares", "Details_Tour", "Medaille_Actuelle"]
-    for c in cols: 
-        if c not in df.columns: df[c] = ""
-    return df
+    try:
+        sh = client.open("suivi_combats")
+        try:
+            # On essaie d'ouvrir l'onglet
+            ws = sh.worksheet(worksheet_name)
+        except gspread.exceptions.WorksheetNotFound:
+            # S'il n'existe pas, on le crée proprement
+            ws = sh.add_worksheet(title=worksheet_name, rows=1000, cols=len(cols_expected) + 2)
+            # On ajoute les titres si c'est une nouvelle feuille
+            if cols_expected:
+                ws.append_row(cols_expected)
+        return ws
+    except Exception as e:
+        st.error(f"Erreur connexion Google Sheet ({worksheet_name}): {e}")
+        return None
+
+def get_live_data():
+    ws = get_worksheet_safe("Feuille 1", []) # Feuille par défaut
+    if ws:
+        df = pd.DataFrame(ws.get_all_records())
+        cols = ["Combattant", "Aire", "Numero", "Casque", "Statut", "Palmares", "Details_Tour", "Medaille_Actuelle"]
+        for c in cols: 
+            if c not in df.columns: df[c] = ""
+        return df
+    return pd.DataFrame()
 
 def get_history_data():
-    client = get_client()
-    try: sh = client.open("suivi_combats").worksheet("Historique")
-    except: sh = client.open("suivi_combats").add_worksheet("Historique", 1000, 4)
-    return pd.DataFrame(sh.get_all_records())
+    ws = get_worksheet_safe("Historique", ["Competition", "Date", "Combattant", "Medaille"])
+    return pd.DataFrame(ws.get_all_records()) if ws else pd.DataFrame()
 
 def get_athletes_db():
-    client = get_client()
-    try: sh = client.open("suivi_combats").worksheet("Athletes")
-    except: sh = client.open("suivi_combats").add_worksheet("Athletes", 100, 5)
-    return pd.DataFrame(sh.get_all_records())
+    ws = get_worksheet_safe("Athletes", ["Nom", "Titre_Honorifique", "Annee_Naissance", "Poids", "Sexe"])
+    return pd.DataFrame(ws.get_all_records()) if ws else pd.DataFrame()
 
 def get_calendar_db():
-    client = get_client()
-    try: sh = client.open("suivi_combats").worksheet("Calendrier")
-    except: sh = client.open("suivi_combats").add_worksheet("Calendrier", 100, 2)
-    return pd.DataFrame(sh.get_all_records())
+    ws = get_worksheet_safe("Calendrier", ["Nom_Competition", "Date_Prevue"])
+    return pd.DataFrame(ws.get_all_records()) if ws else pd.DataFrame()
 
 def get_preinscriptions_db():
-    client = get_client()
-    try: sh = client.open("suivi_combats").worksheet("PreInscriptions")
-    except: sh = client.open("suivi_combats").add_worksheet("PreInscriptions", 100, 6)
-    return pd.DataFrame(sh.get_all_records())
+    ws = get_worksheet_safe("PreInscriptions", ["Competition_Cible", "Nom", "Annee", "Poids", "Sexe", "Categorie"])
+    return pd.DataFrame(ws.get_all_records()) if ws else pd.DataFrame()
 
 def get_valid_competitions():
     df = get_calendar_db()
@@ -119,54 +133,31 @@ def get_valid_competitions():
     return valid
 
 # --- SAUVEGARDES ---
-def save_live(df):
-    client = get_client()
-    sh = client.open("suivi_combats").sheet1
-    sh.clear()
-    sh.update([df.columns.values.tolist()] + df.values.tolist())
+def save_dataframe(df, worksheet_name):
+    ws = get_worksheet_safe(worksheet_name, [])
+    if ws:
+        ws.clear()
+        ws.update([df.columns.values.tolist()] + df.values.tolist())
 
-def save_history(df):
-    client = get_client()
-    sh = client.open("suivi_combats").worksheet("Historique")
-    sh.clear()
-    sh.update([df.columns.values.tolist()] + df.values.tolist())
+def save_live(df): save_dataframe(df, "Feuille 1") # Utilise le nom par défaut du sheet
+def save_history(df): save_dataframe(df, "Historique")
+def save_calendar(df): save_dataframe(df, "Calendrier")
+def save_preinscriptions(df): save_dataframe(df, "PreInscriptions")
 
-def save_calendar(df):
-    client = get_client()
-    sh = client.open("suivi_combats").worksheet("Calendrier")
-    sh.clear()
-    sh.update([df.columns.values.tolist()] + df.values.tolist())
-
-def save_preinscriptions(df):
-    client = get_client()
-    sh = client.open("suivi_combats").worksheet("PreInscriptions")
-    sh.clear()
-    sh.update([df.columns.values.tolist()] + df.values.tolist())
-
-def update_athlete_full(nom, titre, annee, poids, sexe):
-    client = get_client()
-    sh = client.open("suivi_combats").worksheet("Athletes")
-    df = pd.DataFrame(sh.get_all_records())
-    
-    expected_cols = ["Nom", "Titre_Honorifique", "Annee_Naissance", "Poids", "Sexe"]
-    for c in expected_cols: 
-        if c not in df.columns: df[c] = ""
+def save_athlete(nom, titre):
+    ws = get_worksheet_safe("Athletes", ["Nom", "Titre_Honorifique", "Annee_Naissance", "Poids", "Sexe"])
+    if ws:
+        df = pd.DataFrame(ws.get_all_records())
+        if "Nom" not in df.columns: df = pd.DataFrame(columns=["Nom", "Titre_Honorifique"])
         
-    if nom in df['Nom'].values:
-        idx = df[df['Nom'] == nom].index[0]
-        df.at[idx, "Titre_Honorifique"] = titre
-        df.at[idx, "Annee_Naissance"] = annee
-        df.at[idx, "Poids"] = poids
-        df.at[idx, "Sexe"] = sexe
-    else:
-        new_row = pd.DataFrame([{
-            "Nom": nom, "Titre_Honorifique": titre, 
-            "Annee_Naissance": annee, "Poids": poids, "Sexe": sexe
-        }])
-        df = pd.concat([df, new_row], ignore_index=True)
-    
-    sh.clear()
-    sh.update([df.columns.values.tolist()] + df.values.tolist())
+        if nom in df['Nom'].values:
+            idx = df[df['Nom'] == nom].index[0]
+            df.at[idx, "Titre_Honorifique"] = titre
+        else:
+            new_row = pd.DataFrame([{"Nom": nom, "Titre_Honorifique": titre}])
+            df = pd.concat([df, new_row], ignore_index=True)
+        
+        save_dataframe(df, "Athletes")
 
 # --- INTERFACE ---
 tab_public, tab_profil, tab_historique, tab_coach = st.tabs(["📢 LIVE", "👤 PROFILS", "🏛️ CLUB", "🛠️ COACH"])
@@ -207,7 +198,7 @@ with tab_public:
                     </div>
                     """, unsafe_allow_html=True)
             if df_active.empty: st.info("Aucun combat.")
-    except Exception as e: st.error(f"Erreur: {e}")
+    except Exception as e: st.error(f"Erreur affichage: {e}")
 
 # 2. PROFILS
 with tab_profil:
@@ -270,7 +261,7 @@ with tab_coach:
 
         # --- INSCRIPTIONS ---
         with st.expander("📝 Préparer Inscriptions", expanded=False):
-            st.info("Saisissez les infos pour générer la liste à envoyer.")
+            st.info("Gérez les inscriptions futures ou récupérez les qualifiés.")
             if 'inscription_df' not in st.session_state:
                 st.session_state['inscription_df'] = pd.DataFrame(columns=["Compétition", "Nom Complet", "Année Naissance", "Poids (kg)", "Sexe (M/F)", "Catégorie Calculée"])
             if "Compétition" not in st.session_state['inscription_df'].columns:
@@ -312,7 +303,6 @@ with tab_coach:
 
         # --- MODULE INSCRIPTION CHAMPIONNAT (EX RATTRAPAGE) ---
         with st.expander("🏆 Inscription Championnat (Via Résultats Passés)", expanded=True):
-            st.warning("Inscrire automatiquement les médaillés d'une compétition passée vers une future.")
             
             hist_df = get_history_data()
             past_compets = hist_df['Competition'].unique().tolist() if not hist_df.empty else []
@@ -323,7 +313,6 @@ with tab_coach:
             
             if st.button("🚀 Générer les inscriptions"):
                 if source_evt != "Sélectionner..." and target_evt != "Sélectionner...":
-                    # Filtre : Or et Argent
                     winners = hist_df[(hist_df['Competition'] == source_evt) & (hist_df['Medaille'].isin(['🥇 Or', '🥈 Argent']))]
                     
                     if not winners.empty:
@@ -335,11 +324,9 @@ with tab_coach:
                         for idx, row in winners.iterrows():
                             nom = row['Combattant']
                             
-                            # --- SÉCURITÉ DOUBLON ---
-                            # On vérifie si CE boxeur est DÉJÀ inscrit à CETTE compétition cible
+                            # SÉCURITÉ DOUBLON
                             already_exists = False
                             if not df_pre.empty:
-                                # On cherche la ligne exacte
                                 match = df_pre[
                                     (df_pre['Nom'] == nom) & 
                                     (df_pre['Competition_Cible'] == target_evt)
@@ -349,9 +336,8 @@ with tab_coach:
                             
                             if already_exists:
                                 count_skipped += 1
-                                continue # On passe au suivant sans l'ajouter
+                                continue 
                                 
-                            # Si pas doublon, on prépare l'ajout
                             infos = df_ath[df_ath['Nom'] == nom]
                             if not infos.empty:
                                 info = infos.iloc[0]
@@ -371,14 +357,10 @@ with tab_coach:
                             full_pre = pd.concat([df_pre, pd.DataFrame(new_quals)], ignore_index=True)
                             save_preinscriptions(full_pre)
                             st.success(f"✅ {len(new_quals)} nouveaux inscrits pour '{target_evt}' !")
-                            if count_skipped > 0:
-                                st.info(f"ℹ️ {count_skipped} combattants ignorés car déjà inscrits.")
-                        else:
-                            st.warning("Aucun nouveau combattant à inscrire (tous les médaillés sont déjà dans la liste).")
-                    else:
-                        st.warning("Aucun médaillé Or/Argent trouvé.")
-                else:
-                    st.error("Sélectionnez les compétitions.")
+                            if count_skipped > 0: st.info(f"ℹ️ {count_skipped} ignorés (déjà inscrits).")
+                        else: st.warning("Aucun nouveau combattant (déjà tous inscrits).")
+                    else: st.warning("Aucun médaillé Or/Argent trouvé.")
+                else: st.error("Sélectionnez les compétitions.")
 
         st.divider()
 
@@ -460,7 +442,7 @@ with tab_coach:
                     new_arch.append({"Competition": nom_compet, "Date": str(date_compet), "Combattant": nom, "Medaille": res})
                     report.append(f"{res} {nom}")
                     if target_evt and res in ["🥇 Or", "🥈 Argent"]:
-                        # DOUBLON CHECK POUR CLOTURE
+                        # CHECK DOUBLON
                         exists = False
                         if not df_pre.empty:
                             if not df_pre[(df_pre['Nom'] == nom) & (df_pre['Competition_Cible'] == target_evt)].empty:
@@ -497,8 +479,5 @@ with tab_coach:
                 if c not in df_ath.columns: df_ath[c] = ""
             edited_ath = st.data_editor(df_ath, num_rows="dynamic", key="ath_editor", column_config={"Sexe": st.column_config.SelectboxColumn("Sexe", options=["M", "F"])})
             if st.button("Sauvegarder Base Athlètes"):
-                client = get_client()
-                sh = client.open("suivi_combats").worksheet("Athletes")
-                sh.clear()
-                sh.update([edited_ath.columns.values.tolist()] + edited_ath.values.tolist())
+                save_dataframe(edited_ath, "Athletes")
                 st.success("Base mise à jour")

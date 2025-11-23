@@ -8,17 +8,11 @@ st.set_page_config(page_title="Fight Tracker", page_icon="🥊", layout="centere
 
 # --- CONNEXION SECURISEE ---
 def get_connection():
-    # On définit le périmètre d'accès (Scope)
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-    
-    # On récupère les infos secrètes depuis le fichier secrets.toml de Streamlit
-    # Assurez-vous d'avoir bien rempli .streamlit/secrets.toml
     creds_dict = dict(st.secrets["gcp_service_account"])
-    
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     client = gspread.authorize(creds)
-    
-    # OUVERTURE DU FICHIER - Remplacer par le nom EXACT de votre fichier
+    # Assurez-vous que le nom ici est bien celui de votre Google Sheet
     sheet = client.open("suivi_combats").sheet1 
     return sheet
 
@@ -26,54 +20,64 @@ def get_connection():
 def get_data():
     sh = get_connection()
     data = sh.get_all_records()
-    # Si vide, on retourne un dataframe vide avec les bonnes colonnes
     if not data:
         return pd.DataFrame(columns=["Combattant", "Aire", "Numero", "Casque", "Statut"])
     return pd.DataFrame(data)
 
 def add_data(combattant, aire, numero, casque):
     sh = get_connection()
-    # On ajoute la ligne
     sh.append_row([combattant, aire, numero, casque, "A venir"])
 
 # --- INTERFACE ---
 st.title("🥊 Suivi Combats Mobile")
 
-# 1. FORMULAIRE
-with st.expander("➕ Ajouter un combattant", expanded=False):
+# 1. FORMULAIRE (MODIFIÉ : AIRE MANUELLE)
+with st.expander("➕ Ajouter un combattant", expanded=True):
     with st.form("add_form"):
-        nom = st.text_input("Nom")
+        nom = st.text_input("Nom du combattant")
+        
         col_a, col_b = st.columns(2)
-        aire = col_a.selectbox("Aire", ["Aire 1", "Aire 2", "Aire 3"])
+        
+        # --- CHANGEMENT ICI : Saisie libre du numéro d'aire ---
+        aire = col_a.number_input("N° Aire", min_value=1, step=1)
+        
         num = col_b.number_input("N° Combat", min_value=1, step=1)
         casque = st.radio("Casque", ["Rouge", "Bleu"], horizontal=True)
         
-        if st.form_submit_button("Valider"):
-            add_data(nom, aire, num, casque)
-            st.success("Ajouté !")
-            st.rerun()
+        if st.form_submit_button("Valider et Enregistrer"):
+            if nom:
+                add_data(nom, aire, num, casque)
+                st.success("C'est enregistré !")
+                st.rerun()
+            else:
+                st.error("Il faut mettre un nom !")
 
 # 2. LISTE TRIÉE
+st.divider()
 st.subheader("Chronologie des passages")
 
 try:
     df = get_data()
     if not df.empty:
-        # Conversion Numéro en entier pour bien trier (éviter que 10 soit avant 2)
-        df['Numero'] = pd.to_numeric(df['Numero'])
+        # Sécurisation des données pour le tri
+        df['Numero'] = pd.to_numeric(df['Numero'], errors='coerce')
+        df['Aire'] = pd.to_numeric(df['Aire'], errors='coerce')
         
-        # TRI MAGIQUE : Par Numéro croissant, puis par Aire
+        # Tri : D'abord par Numéro de combat, ensuite par Aire
         df_sorted = df.sort_values(by=['Numero', 'Aire'])
         
-        # AFFICHAGE
         for i, row in df_sorted.iterrows():
             icon = "🔴" if row['Casque'] == "Rouge" else "🔵"
+            
+            # Gestion des erreurs d'affichage si une ligne est vide
+            num_combat = int(row['Numero']) if pd.notnull(row['Numero']) else "?"
+            num_aire = int(row['Aire']) if pd.notnull(row['Aire']) else "?"
+            
             with st.container():
-                # Design type "Billet d'avion"
-                st.info(f"**Combat #{row['Numero']}** | {row['Aire']}\n\n{icon} **{row['Combattant']}**")
+                st.info(f"**Combat #{num_combat}** (Aire {num_aire})\n\n{icon} **{row['Combattant']}**")
     else:
-        st.info("Aucun combat enregistré.")
+        st.info("La liste est vide pour l'instant.")
 
 except Exception as e:
-    st.error(f"Erreur de connexion : {e}")
-    st.warning("Avez-vous bien créé le fichier secrets.toml et partagé le Sheet ?")
+    st.error(f"Une petite erreur est survenue : {e}")
+    st.warning("Vérifiez que la colonne C de votre Google Sheet s'appelle bien 'Numero' (sans accent).")

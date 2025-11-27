@@ -1,55 +1,3 @@
-{
-  "pensee": {
-    "analyse_erreur": {
-      "message": "KeyError: 'Competition_Cible'",
-      "contexte": "L'utilisateur tente d'importer les inscrits. Le code cherche la colonne 'Competition_Cible' dans le DataFrame 'pre' (données de l'onglet PreInscriptions).",
-      "cause_racine": "L'onglet 'PreInscriptions' dans le Google Sheet existe probablement, mais il ne contient pas la colonne exacte 'Competition_Cible' (peut-être une ancienne version avec 'Compétition' ou vide). La fonction de lecture `get_all_records` récupère les en-têtes actuels du Sheet, qui sont incorrects/obsolètes, provoquant le crash lors du filtrage."
-    },
-    "strategie_resolution": {
-      "action_immediate": "Fournir une version V35 du code avec une fonction de lecture 'Autocorrectrice' (Self-Healing).",
-      "mecanisme_correction": "Modifier la fonction `fetch_data` pour qu'elle vérifie si les colonnes attendues sont présentes. Si une colonne manque (comme 'Competition_Cible'), le code l'ajoute virtuellement au DataFrame pour éviter le crash.",
-      "conseil_supplementaire": "Conseiller à l'utilisateur de vérifier son Google Sheet, mais le code devrait gérer l'erreur seul."
-    },
-    "plan_action": [
-      "Expliquer pourquoi l'erreur survient (Décalage entre le code et le fichier Sheet).",
-      "Proposer le Code V35 avec la sécurisation des colonnes dans `fetch_data`.",
-      "Instructions pour remplacer le code."
-    ]
-  },
-  "action": {
-    "nom_outil": "agent_redaction",
-    "parametres_outil": {
-      "sujet": "Correction KeyError Competition_Cible V35",
-      "points_cles": [
-        "Diagnostic : L'onglet Google Sheet 'PreInscriptions' n'a pas les bons titres de colonnes.",
-        "Solution Code V35 : Ajout d'une sécurité 'Auto-Réparation' des colonnes.",
-        "Si une colonne manque, le code la crée vide au lieu de planter.",
-        "Instruction : Remplacer tout le fichier app.py."
-      ],
-      "ton": "Technique, Rassurant et Résolutif",
-      "format": "Markdown"
-    }
-  }
-}
-```**SUPERVISEUR : CORRECTION ERREUR "KEYERROR" (V35)**
-
-**Diagnostic :**
-L'erreur `KeyError: 'Competition_Cible'` signifie que dans votre fichier Google Sheet, l'onglet **`PreInscriptions`** existe, mais il n'a pas la colonne exacte nommée `Competition_Cible` (peut-être qu'il a encore l'ancien nom "Compétition" ou qu'il est vide/corrompu).
-
-Le code essaie de lire une colonne qui n'est pas là physiquement.
-
-Voici la **Version 35**.
-
-**La Nouveauté Technique (Anti-Crash) :**
-J'ai modifié le moteur de lecture (`fetch_data`). Désormais, si le robot ne trouve pas une colonne obligatoire (comme `Competition_Cible`), **il la crée virtuellement** au lieu de faire planter l'application. C'est une fonction d'auto-réparation.
-
----
-
-### 💻 CODE V35 (Auto-Réparation des Colonnes)
-
-Remplacez tout le fichier `app.py`.
-
-```python
 import streamlit as st
 import pandas as pd
 import gspread
@@ -59,11 +7,12 @@ import urllib.parse
 import time
 
 # --- CONFIGURATION & DESIGN ---
-st.set_page_config(page_title="Fight Tracker V35", page_icon="🥊", layout="wide")
+st.set_page_config(page_title="Fight Tracker V33", page_icon="🥊", layout="wide")
 
 st.markdown("""
     <style>
         html, body, [class*="css"]  { font-family: 'Roboto', sans-serif; font-size: 14px; }
+        
         .combat-card {
             background: linear-gradient(145deg, #1E1E1E, #252525);
             border-radius: 8px; padding: 12px; margin-bottom: 8px; 
@@ -104,6 +53,7 @@ def calculer_categorie(annee, poids, sexe):
         elif 16 <= age <= 17: cat_age = "Junior"
         elif 18 <= age <= 40: cat_age = "Senior"
         elif age >= 41: cat_age = "Vétéran"
+        
         limites = []
         if cat_age == "Poussin": limites = [23, 28, 32, 37, 42, 47]
         elif cat_age == "Benjamin": limites = [28, 32, 37, 42, 47, 52]
@@ -112,6 +62,7 @@ def calculer_categorie(annee, poids, sexe):
         elif cat_age in ["Junior", "Senior", "Vétéran"]:
             if sexe == "F": limites = [48, 52, 56, 60, 65, 70]
             else: limites = [57, 63, 69, 74, 79, 84, 89, 94]
+        
         cat_poids = "Hors cat."
         if limites and poids > limites[-1]: cat_poids = f"+{limites[-1]}kg"
         else:
@@ -127,8 +78,9 @@ def get_worksheet_safe(name, cols):
     except: return None
     try: ws = sh.worksheet(name)
     except: 
+        # Création automatique avec en-têtes si inexistant
         ws = sh.add_worksheet(name, 1000, len(cols)+2)
-        ws.append_row(cols)
+        if cols: ws.append_row(cols)
         time.sleep(1)
     return ws
 
@@ -138,14 +90,9 @@ def fetch_data(sheet_name, expected_cols):
     if ws:
         try: 
             df = pd.DataFrame(ws.get_all_records())
-            
-            # --- AUTO-REPARATION DES COLONNES (NOUVEAU) ---
-            # Si le tableau existe mais qu'il manque des colonnes, on les ajoute vides
-            # pour éviter l'erreur KeyError
+            # Auto-réparation colonnes manquantes
             for col in expected_cols:
-                if col not in df.columns:
-                    df[col] = "" # Création colonne vide si manquante
-            
+                if col not in df.columns: df[col] = ""
             return df
         except: return pd.DataFrame(columns=expected_cols)
     return pd.DataFrame(columns=expected_cols)
@@ -168,12 +115,12 @@ def save_athlete(nom, prenom, titre, annee, poids, sexe):
     ws = get_worksheet_safe("Athletes", cols_order)
     if ws:
         df = pd.DataFrame(ws.get_all_records())
-        # Correction sécurité : vérifier si colonnes existent avant
         if "Nom" not in df.columns: df = pd.DataFrame(columns=cols_order)
         
         nom = str(nom).strip().upper()
         prenom = str(prenom).strip().capitalize()
         
+        # Recherche match Nom+Prénom
         mask = (df['Nom'] == nom) & (df['Prenom'] == prenom)
         if mask.any():
             idx = df[mask].index[0]
@@ -188,7 +135,7 @@ def save_athlete(nom, prenom, titre, annee, poids, sexe):
             }])
             df = pd.concat([df, new_row], ignore_index=True)
         
-        # On force l'ordre des colonnes, et on remplit les vides par ""
+        # Force l'ordre des colonnes
         for c in cols_order:
             if c not in df.columns: df[c] = ""
         df = df[cols_order]
@@ -198,37 +145,53 @@ def save_athlete(nom, prenom, titre, annee, poids, sexe):
         fetch_data.clear()
 
 def process_end_match(live_df, idx, resultat, nom_compet, date_compet, target_evt):
+    # 1. Update Live
     live_df.at[idx, 'Statut'] = "Terminé"
     live_df.at[idx, 'Medaille_Actuelle'] = resultat
     live_df.at[idx, 'Palmares'] = resultat
     save_data(live_df, "Feuille 1", [])
     
+    # 2. Archive Historique
     nom_full = live_df.at[idx, 'Combattant']
     hist = get_history_data()
     new_entry = pd.DataFrame([{"Competition": nom_compet, "Date": str(date_compet), "Combattant": nom_full, "Medaille": resultat}])
     save_data(pd.concat([hist, new_entry], ignore_index=True), "Historique", ["Competition", "Date", "Combattant", "Medaille"])
     
+    # 3. Qualif Auto
     if target_evt and resultat in ["🥇 Or", "🥈 Argent"]:
         ath = get_athletes_db()
         pre = get_preinscriptions_db()
-        parts = nom_full.split()
+        
+        # Découpage Nom complet pour recherche
+        parts = str(nom_full).split()
         nom_s, prenom_s = "", ""
         if len(parts) > 1:
             nom_s = " ".join(parts[:-1]); prenom_s = parts[-1]
+        else:
+            nom_s = nom_full
         
+        # Check doublon
         exists = False
         if not pre.empty:
-            if not pre[(pre['Nom'] == nom_s) & (pre['Prenom'] == prenom_s) & (pre['Competition_Cible'] == target_evt)].empty: exists = True
+            match = pre[(pre['Nom'] == nom_s) & (pre['Prenom'] == prenom_s) & (pre['Competition_Cible'] == target_evt)]
+            if not match.empty: exists = True
         
         if not exists:
             inf_row = pd.DataFrame()
             if not ath.empty:
-                inf_row = ath[(ath['Nom'] == nom_s) & (ath['Prenom'] == prenom_s)]
+                # Recherche (Nom+Prenom) ou (Nom complet reconstitué)
+                mask = (ath['Nom'] == nom_s) & (ath['Prenom'] == prenom_s)
+                if mask.any(): inf_row = ath[mask]
             
             if not inf_row.empty:
                 inf = inf_row.iloc[0]
                 cat = calculer_categorie(inf['Annee_Naissance'], inf['Poids'], inf['Sexe'])
-                new_q = pd.DataFrame([{"Competition_Cible": target_evt, "Nom": nom_s, "Prenom": prenom_s, "Annee": inf['Annee_Naissance'], "Poids": inf['Poids'], "Sexe": inf['Sexe'], "Categorie": cat}])
+                new_q = pd.DataFrame([{
+                    "Competition_Cible": target_evt, 
+                    "Nom": nom_s, "Prenom": prenom_s, 
+                    "Annee": inf['Annee_Naissance'], "Poids": inf['Poids'], "Sexe": inf['Sexe'], 
+                    "Categorie": cat
+                }])
                 save_data(pd.concat([pre, new_q], ignore_index=True), "PreInscriptions", [])
                 st.toast(f"Qualifié !", icon="🚀")
 
@@ -252,10 +215,12 @@ with tab_public:
             if row['Statut'] != "Terminé":
                 css_class = "combat-card"
                 border = "#FF4B4B" if "En cours" in row['Statut'] else "#444"
+                
+                # Titre Bio
                 titre = ""
                 nom_complet = row['Combattant']
                 if not df_ath.empty:
-                    parts = nom_complet.split()
+                    parts = str(nom_complet).split()
                     if len(parts) > 1:
                         n = " ".join(parts[:-1]); p = parts[-1]
                         info = df_ath[(df_ath['Nom'] == n) & (df_ath['Prenom'] == p)]
@@ -375,7 +340,6 @@ with tab_coach:
             st.markdown("#### 2. Inscriptions")
             if 'inscr_df' not in st.session_state: st.session_state['inscr_df'] = pd.DataFrame(columns=["Compétition", "Nom", "Prénom", "Année Naissance", "Poids (kg)", "Sexe (M/F)", "Catégorie Calculée"])
             
-            # LOAD ATHLETES
             with st.expander("📂 Charger depuis la Base Athlètes"):
                 db_ath = get_athletes_db()
                 if not db_ath.empty:

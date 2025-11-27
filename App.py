@@ -7,7 +7,7 @@ import urllib.parse
 import time
 
 # --- CONFIGURATION & DESIGN ---
-st.set_page_config(page_title="Fight Tracker V41", page_icon="🥊", layout="wide")
+st.set_page_config(page_title="Fight Tracker V42", page_icon="🥊", layout="wide")
 
 st.markdown("""
     <style>
@@ -23,11 +23,10 @@ st.markdown("""
         .combat-aire { background: #FFD700; color:black; padding: 2px 8px; border-radius: 10px; font-size: 0.85em; font-weight: bold; }
         .fighter-name { font-size: 1.3em; font-weight: 700; color: #fff; }
         .honor-title { font-size: 0.8em; color: #FFD700; font-style: italic; display:block; opacity:0.8;}
-        
         .corner-red { color: #FF4B4B; border: 1px solid #FF4B4B; padding: 2px 6px; border-radius: 4px; font-size: 0.8em; margin-right: 5px;}
         .corner-blue { color: #2196F3; border: 1px solid #2196F3; padding: 2px 6px; border-radius: 4px; font-size: 0.8em; margin-right: 5px;}
-        .stToast { background-color: #00C853 !important; color: white !important; }
         .dispatch-box { border: 2px dashed #FFD700; padding: 15px; border-radius: 10px; background-color: #2b2d35; margin-bottom: 20px; }
+        .stToast { background-color: #00C853 !important; color: white !important; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -111,10 +110,8 @@ def save_athlete(nom, prenom, titre, annee, poids, sexe):
     if ws:
         df = pd.DataFrame(ws.get_all_records())
         if "Nom" not in df.columns: df = pd.DataFrame(columns=cols_order)
-        
         nom = str(nom).strip().upper()
         prenom = str(prenom).strip().capitalize()
-        
         mask = (df['Nom'] == nom) & (df['Prenom'] == prenom)
         if mask.any():
             idx = df[mask].index[0]
@@ -123,12 +120,8 @@ def save_athlete(nom, prenom, titre, annee, poids, sexe):
             if poids: df.at[idx, "Poids"] = poids
             if sexe: df.at[idx, "Sexe"] = sexe
         else:
-            new_row = pd.DataFrame([{
-                "Nom": nom, "Prenom": prenom, "Titre_Honorifique": titre,
-                "Annee_Naissance": annee, "Poids": poids, "Sexe": sexe
-            }])
+            new_row = pd.DataFrame([{"Nom": nom, "Prenom": prenom, "Titre_Honorifique": titre, "Annee_Naissance": annee, "Poids": poids, "Sexe": sexe}])
             df = pd.concat([df, new_row], ignore_index=True)
-        
         df = df[cols_order]
         ws.clear(); ws.update([df.columns.values.tolist()] + df.values.tolist()); fetch_data.clear()
 
@@ -137,24 +130,20 @@ def process_end_match(live_df, idx, resultat, nom_compet, date_compet, target_ev
     live_df.at[idx, 'Medaille_Actuelle'] = resultat
     live_df.at[idx, 'Palmares'] = resultat
     save_data(live_df, "Feuille 1", [])
-    
     nom_full = live_df.at[idx, 'Combattant']
     hist = get_history_data()
     if nom_full and resultat:
         new_entry = pd.DataFrame([{"Competition": nom_compet, "Date": str(date_compet), "Combattant": nom_full, "Medaille": resultat}])
         save_data(pd.concat([hist, new_entry], ignore_index=True), "Historique", ["Competition", "Date", "Combattant", "Medaille"])
-    
     if target_evt and resultat in ["🥇 Or", "🥈 Argent"]:
         ath = get_athletes_db()
         pre = get_preinscriptions_db()
         parts = str(nom_full).split()
         nom_s = " ".join(parts[:-1]); prenom_s = parts[-1] if len(parts)>1 else ""
-        
         exists = False
         if not pre.empty:
             match = pre[(pre['Nom'] == nom_s) & (pre['Prenom'] == prenom_s) & (pre['Competition_Cible'] == target_evt)]
             if not match.empty: exists = True
-        
         if not exists:
             inf_row = pd.DataFrame()
             if not ath.empty:
@@ -185,8 +174,6 @@ with tab_public:
         
         st.markdown(f"<h2 style='text-align:center; color:#FFD700;'>{st.session_state.get('Config_Compet', 'Compétition en cours')}</h2>", unsafe_allow_html=True)
         
-        if df.empty: st.info("Les combats n'ont pas encore commencé.")
-        
         for i, row in df.iterrows():
             if row['Statut'] != "Terminé":
                 css_class = "combat-card"
@@ -199,10 +186,8 @@ with tab_public:
                         n = " ".join(parts[:-1]); p = parts[-1]
                         info = df_ath[(df_ath['Nom'] == n) & (df_ath['Prenom'] == p)]
                         if not info.empty: titre = info.iloc[0]['Titre_Honorifique']
-
                 med_badge = f"🏅 {row['Medaille_Actuelle']}" if row['Medaille_Actuelle'] else ""
                 corner_span = "<span class='corner-red'>Rouge</span>" if row['Casque'] == "Rouge" else "<span class='corner-blue'>Bleu</span>"
-
                 st.markdown(f"""
                 <div class="{css_class}" style="border-left: 4px solid {border};">
                     <div class="header-line">
@@ -210,14 +195,11 @@ with tab_public:
                         <span class="combat-aire">AIRE {int(row['Aire'])}</span>
                     </div>
                     <div class="fighter-line">
-                        <div>
-                            {corner_span}
-                            <span class="fighter-name">{row['Combattant']} {med_badge}</span>
-                            <span class="honor-title">{titre}</span>
-                        </div>
+                        <div>{corner_span}<span class="fighter-name">{row['Combattant']} {med_badge}</span><span class="honor-title">{titre}</span></div>
                     </div>
                     <div class="status-badge">{row['Statut']}</div>
                 </div>""", unsafe_allow_html=True)
+        if df.empty: st.info("Les combats n'ont pas encore commencé.")
     else: st.info("Aucun combat.")
 
 # 2. COACH
@@ -242,14 +224,13 @@ with tab_coach:
                             st.markdown(f"**🥊 {row['Combattant']}**")
                             cat_info = row.get('Details_Tour', '')
                             if cat_info: st.caption(f"{cat_info}")
-                        
                         na = c_aire.number_input("Aire", value=1, min_value=1, key=f"wa_{idx}", label_visibility="collapsed")
                         nn = c_num.number_input("N°", value=1, min_value=1, key=f"wn_{idx}", label_visibility="collapsed")
                         nc = c_casque.radio("Casque", ["Rouge", "Bleu"], horizontal=True, key=f"wc_{idx}", label_visibility="collapsed")
-                        
                         if c_btn.button("Go", key=f"wb_{idx}", type="primary"):
                             live.at[idx, 'Aire'] = na; live.at[idx, 'Numero'] = nn; live.at[idx, 'Casque'] = nc
-                            save_data(live, "Feuille 1", []); st.rerun()
+                            save_data(live, "Feuille 1", [])
+                            st.rerun()
                         st.markdown("---")
                     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -285,7 +266,7 @@ with tab_coach:
                                     if st.button("Terminer", key=f"e{idx}", type="primary"):
                                         process_end_match(live, idx, res, st.session_state.get('Config_Compet'), datetime.today(), st.session_state.get('Target_Compet'))
                                         st.rerun()
-            else: st.info("Vide.")
+            else: st.info("Vide. Importez des inscrits dans l'onglet Admin.")
 
         with subtab_admin:
             st.markdown("#### 1. Configuration")
@@ -303,15 +284,15 @@ with tab_coach:
             qualif = st.checkbox("Qualificatif ?")
             st.session_state['Target_Compet'] = st.selectbox("Vers", opts) if qualif else None
             
-            # --- BOUTON IMPORT INTELLIGENT (V41) ---
+            # --- BOUTON IMPORT SECURISE (V42) ---
             if st.button("📥 Importer les Inscrits"):
-                # 1. Sauvegarde automatique du tableau écran
+                # 1. Sauvegarde automatique si tableau rempli
                 if 'inscr_df' in st.session_state and not st.session_state['inscr_df'].empty:
                     to_save = st.session_state['inscr_df'].copy()
-                    to_save = to_save[to_save["Nom"] != ""]
+                    to_save = to_save[to_save["Nom"] != ""] # Filtre lignes vides
                     
                     if not to_save.empty:
-                        # Update Base Athlètes
+                        # Update Base Athletes
                         for _, r in to_save.iterrows():
                             if r["Nom"] and r["Année Naissance"]:
                                 save_athlete(r["Nom"], r["Prénom"], "", r["Année Naissance"], r["Poids (kg)"], r["Sexe (M/F)"])
@@ -320,29 +301,37 @@ with tab_coach:
                         final_save = to_save.rename(columns={"Compétition": "Competition_Cible", "Nom": "Nom", "Prénom": "Prenom", "Année Naissance": "Annee", "Poids (kg)": "Poids", "Sexe (M/F)": "Sexe", "Catégorie Calculée": "Categorie"})
                         current_pre = get_preinscriptions_db()
                         save_data(pd.concat([current_pre, final_save], ignore_index=True), "PreInscriptions", [])
+                        st.toast("Inscriptions sauvegardées auto.", icon="💾")
+                
+                # 2. Importation dans le Live
+                pre = get_preinscriptions_db()
+                sub = pre[pre['Competition_Cible'] == nom_c]
+                
+                if not sub.empty:
+                    cur = get_live_data()
+                    rows = []
+                    for _, r in sub.iterrows():
+                        nom_complet = f"{r['Nom']} {r['Prenom']}".strip()
+                        if nom_complet and (cur.empty or nom_complet not in cur['Combattant'].values):
+                            rows.append({
+                                "Combattant": nom_complet, 
+                                "Aire":0, "Numero":0, "Casque":"Rouge", 
+                                "Statut":"A venir", "Palmares":"", 
+                                "Details_Tour": r.get('Categorie', ''), 
+                                "Medaille_Actuelle":""
+                            })
+                    if rows: 
+                        # FORCE ORDRE COLONNES (Securité gspread)
+                        df_rows = pd.DataFrame(rows)
+                        cols_live = ["Combattant", "Aire", "Numero", "Casque", "Statut", "Palmares", "Details_Tour", "Medaille_Actuelle"]
+                        for c in cols_live:
+                            if c not in df_rows.columns: df_rows[c] = ""
+                        df_rows = df_rows[cols_live]
                         
-                        # --- 2. IMPORT DIRECT DEPUIS LA MEMOIRE (PAS DE RELECTURE SHEET) ---
-                        sub = final_save[final_save['Competition_Cible'] == nom_c]
-                        if not sub.empty:
-                            cur = get_live_data()
-                            rows = []
-                            for _, r in sub.iterrows():
-                                nom_complet = f"{r['Nom']} {r['Prenom']}".strip()
-                                if nom_complet and (cur.empty or nom_complet not in cur['Combattant'].values):
-                                    rows.append({
-                                        "Combattant": nom_complet, 
-                                        "Aire":0, "Numero":0, "Casque":"Rouge", 
-                                        "Statut":"A venir", "Palmares":"", 
-                                        "Details_Tour": r.get('Categorie', ''), 
-                                        "Medaille_Actuelle":""
-                                    })
-                            if rows: 
-                                save_data(pd.concat([cur, pd.DataFrame(rows)], ignore_index=True), "Feuille 1", [])
-                                st.success(f"✅ {len(rows)} inscrits importés au Dispatch !"); st.rerun()
-                            else: st.warning("Déjà dans le Live.")
-                        else: st.warning(f"Aucune ligne pour '{nom_c}' dans le tableau.")
-                    else: st.warning("Tableau vide.")
-                else: st.warning("Rien à importer.")
+                        save_data(pd.concat([cur, df_rows], ignore_index=True), "Feuille 1", [])
+                        st.success(f"✅ {len(rows)} inscrits importés au Dispatch !"); st.rerun()
+                    else: st.warning("Déjà dans le Live.")
+                else: st.warning("Aucun inscrit trouvé.")
             
             st.write("---")
             st.markdown("#### 2. Inscriptions")
@@ -391,7 +380,6 @@ with tab_coach:
                 st.link_button("Envoyer", f"https://wa.me/?text={urllib.parse.quote('📋 INSCRIPTIONS\\n\\n' + txt)}")
             
             if cs.button("💾 Sauvegarder"):
-                # Sauvegarde manuelle seule (sans import)
                 pre = get_preinscriptions_db()
                 to_save = edited.copy()
                 for _, r in to_save.iterrows():

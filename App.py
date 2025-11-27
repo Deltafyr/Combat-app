@@ -7,7 +7,7 @@ import urllib.parse
 import time
 
 # --- CONFIGURATION & DESIGN ---
-st.set_page_config(page_title="Fight Tracker V39", page_icon="🥊", layout="wide")
+st.set_page_config(page_title="Fight Tracker V40", page_icon="🥊", layout="wide")
 
 st.markdown("""
     <style>
@@ -23,7 +23,6 @@ st.markdown("""
         .combat-aire { background: #FFD700; color:black; padding: 2px 8px; border-radius: 10px; font-size: 0.85em; font-weight: bold; }
         .fighter-name { font-size: 1.3em; font-weight: 700; color: #fff; }
         .honor-title { font-size: 0.8em; color: #FFD700; font-style: italic; display:block; opacity:0.8;}
-        
         .corner-red { color: #FF4B4B; border: 1px solid #FF4B4B; padding: 2px 6px; border-radius: 4px; font-size: 0.8em; margin-right: 5px;}
         .corner-blue { color: #2196F3; border: 1px solid #2196F3; padding: 2px 6px; border-radius: 4px; font-size: 0.8em; margin-right: 5px;}
         .stToast { background-color: #00C853 !important; color: white !important; }
@@ -31,7 +30,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- CONNEXION AVEC RETRY AUTOMATIQUE (ANTI-QUOTA) ---
+# --- CONNEXION ---
 @st.cache_resource
 def get_client():
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
@@ -53,7 +52,6 @@ def calculer_categorie(annee, poids, sexe):
         elif 16 <= age <= 17: cat_age = "Junior"
         elif 18 <= age <= 40: cat_age = "Senior"
         elif age >= 41: cat_age = "Vétéran"
-        
         limites = []
         if cat_age == "Poussin": limites = [23, 28, 32, 37, 42, 47]
         elif cat_age == "Benjamin": limites = [28, 32, 37, 42, 47, 52]
@@ -62,7 +60,6 @@ def calculer_categorie(annee, poids, sexe):
         elif cat_age in ["Junior", "Senior", "Vétéran"]:
             if sexe == "F": limites = [48, 52, 56, 60, 65, 70]
             else: limites = [57, 63, 69, 74, 79, 84, 89, 94]
-        
         cat_poids = "Hors cat."
         if limites and poids > limites[-1]: cat_poids = f"+{limites[-1]}kg"
         else:
@@ -71,28 +68,24 @@ def calculer_categorie(annee, poids, sexe):
         return f"{cat_age} {sexe} {cat_poids}"
     except: return "?"
 
-# --- BDD ROBUSTE (ANTI-CRASH) ---
+# --- BDD ROBUSTE ---
 def get_worksheet_safe(name, cols):
     client = get_client()
-    # Système de tentative multiple (Retry) en cas d'erreur Quota
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            sh = client.open("suivi_combats")
-            try: ws = sh.worksheet(name)
-            except: 
-                ws = sh.add_worksheet(name, 1000, len(cols)+2)
-                if cols: ws.append_row(cols)
+    try: sh = client.open("suivi_combats")
+    except: return None
+    
+    # Tentative d'accès sécurisé
+    try:
+        ws_list = [s.title for s in sh.worksheets()]
+        if name in ws_list:
+            return sh.worksheet(name)
+        else:
+            ws = sh.add_worksheet(name, 1000, len(cols)+2)
+            if cols: ws.append_row(cols)
             return ws
-        except Exception as e:
-            if attempt < max_retries - 1:
-                time.sleep(2 * (attempt + 1)) # Attente exponentielle (2s, 4s, 6s)
-                continue
-            else:
-                st.error(f"Erreur connexion Google Sheet (Quota): {e}")
-                return None
+    except: return None
 
-@st.cache_data(ttl=10) # Cache plus long pour économiser les requêtes
+@st.cache_data(ttl=5)
 def fetch_data(sheet_name, expected_cols):
     ws = get_worksheet_safe(sheet_name, expected_cols)
     if ws:
@@ -113,14 +106,9 @@ def get_preinscriptions_db(): return fetch_data("PreInscriptions", ["Competition
 def save_data(df, sheet_name, cols_def):
     ws = get_worksheet_safe(sheet_name, cols_def)
     if ws:
-        # Retry logic aussi pour la sauvegarde
-        for i in range(3):
-            try:
-                ws.clear()
-                ws.update([df.columns.values.tolist()] + df.values.tolist())
-                fetch_data.clear()
-                break
-            except: time.sleep(2)
+        ws.clear()
+        ws.update([df.columns.values.tolist()] + df.values.tolist())
+        fetch_data.clear()
 
 def save_athlete(nom, prenom, titre, annee, poids, sexe):
     cols_order = ["Nom", "Prenom", "Annee_Naissance", "Poids", "Sexe", "Titre_Honorifique"]
@@ -166,7 +154,6 @@ def process_end_match(live_df, idx, resultat, nom_compet, date_compet, target_ev
         pre = get_preinscriptions_db()
         parts = str(nom_full).split()
         nom_s = " ".join(parts[:-1]); prenom_s = parts[-1] if len(parts)>1 else ""
-        
         exists = False
         if not pre.empty:
             match = pre[(pre['Nom'] == nom_s) & (pre['Prenom'] == prenom_s) & (pre['Competition_Cible'] == target_evt)]
@@ -184,7 +171,7 @@ def process_end_match(live_df, idx, resultat, nom_compet, date_compet, target_ev
             else:
                 new_q = pd.DataFrame([{"Competition_Cible": target_evt, "Nom": nom_s, "Prenom": prenom_s, "Categorie": "A compléter"}])
             save_data(pd.concat([pre, new_q], ignore_index=True), "PreInscriptions", [])
-            st.toast(f"Qualifié pour {target_evt} !", icon="🚀")
+            st.toast(f"Qualifié !", icon="🚀")
 
 # --- INTERFACE ---
 tab_public, tab_coach, tab_profil, tab_historique = st.tabs(["📢 LIVE", "🛠️ COACH", "👤 PROFILS", "🏛️ CLUB"])
@@ -194,16 +181,11 @@ with tab_public:
     if st.button("Actualiser", key="ref_pub", use_container_width=True): st.rerun()
     df = get_live_data()
     df_ath = get_athletes_db()
-    
     if not df.empty:
         df['Numero'] = pd.to_numeric(df['Numero'], errors='coerce').fillna(0)
         df['Aire'] = pd.to_numeric(df['Aire'], errors='coerce').fillna(0)
         df = df[(df['Numero'] > 0)].sort_values(by=['Numero', 'Aire'])
-        
         st.markdown(f"<h2 style='text-align:center; color:#FFD700;'>{st.session_state.get('Config_Compet', 'Compétition en cours')}</h2>", unsafe_allow_html=True)
-        
-        if df.empty: st.info("Les combats n'ont pas encore commencé (attente du tirage).")
-        
         for i, row in df.iterrows():
             if row['Statut'] != "Terminé":
                 css_class = "combat-card"
@@ -216,10 +198,8 @@ with tab_public:
                         n = " ".join(parts[:-1]); p = parts[-1]
                         info = df_ath[(df_ath['Nom'] == n) & (df_ath['Prenom'] == p)]
                         if not info.empty: titre = info.iloc[0]['Titre_Honorifique']
-
                 med_badge = f"🏅 {row['Medaille_Actuelle']}" if row['Medaille_Actuelle'] else ""
                 corner_span = "<span class='corner-red'>Rouge</span>" if row['Casque'] == "Rouge" else "<span class='corner-blue'>Bleu</span>"
-
                 st.markdown(f"""
                 <div class="{css_class}" style="border-left: 4px solid {border};">
                     <div class="header-line">
@@ -235,6 +215,7 @@ with tab_public:
                     </div>
                     <div class="status-badge">{row['Statut']}</div>
                 </div>""", unsafe_allow_html=True)
+        if df.empty: st.info("Les combats n'ont pas encore commencé.")
     else: st.info("Aucun combat.")
 
 # 2. COACH
@@ -249,21 +230,17 @@ with tab_coach:
                 # ZONE DISPATCH
                 live['Numero'] = pd.to_numeric(live['Numero'], errors='coerce').fillna(0)
                 waiting_list = live[(live['Statut'] != "Terminé") & (live['Numero'] == 0)]
-                
                 if not waiting_list.empty:
-                    st.markdown("### ⚠️ À PROGRAMMER (Tirage)")
+                    st.markdown("### ⚠️ À PROGRAMMER")
                     st.markdown('<div class="dispatch-box">', unsafe_allow_html=True)
                     for idx, row in waiting_list.iterrows():
                         c_nom, c_aire, c_num, c_casque, c_btn = st.columns([2, 1, 1, 2, 1])
                         with c_nom:
                             st.markdown(f"**🥊 {row['Combattant']}**")
-                            cat_info = row.get('Details_Tour', '')
-                            if cat_info: st.caption(f"{cat_info}")
-                        
+                            st.caption(f"{row.get('Details_Tour', '')}")
                         na = c_aire.number_input("Aire", value=1, min_value=1, key=f"wa_{idx}", label_visibility="collapsed")
                         nn = c_num.number_input("N°", value=1, min_value=1, key=f"wn_{idx}", label_visibility="collapsed")
                         nc = c_casque.radio("Casque", ["Rouge", "Bleu"], horizontal=True, key=f"wc_{idx}", label_visibility="collapsed")
-                        
                         if c_btn.button("Go", key=f"wb_{idx}", type="primary"):
                             live.at[idx, 'Aire'] = na; live.at[idx, 'Numero'] = nn; live.at[idx, 'Casque'] = nc
                             save_data(live, "Feuille 1", []); st.rerun()
@@ -320,10 +297,36 @@ with tab_coach:
             qualif = st.checkbox("Qualificatif ?")
             st.session_state['Target_Compet'] = st.selectbox("Vers", opts) if qualif else None
             
-            # --- BOUTON IMPORT ---
+            # --- BOUTON IMPORT INTELLIGENT (V40) ---
             if st.button("📥 Importer les Inscrits"):
-                pre = get_preinscriptions_db()
+                # 1. Sauvegarde automatique de ce qui est à l'écran si nécessaire
+                if 'inscr_df' in st.session_state and not st.session_state['inscr_df'].empty:
+                    to_save = st.session_state['inscr_df'].copy()
+                    # On ne sauvegarde que les lignes valides (avec Nom)
+                    to_save = to_save[to_save["Nom"] != ""]
+                    
+                    if not to_save.empty:
+                        # Mise à jour Base Athlètes
+                        for _, r in to_save.iterrows():
+                            # Reconstitution Nom Complet pour mise à jour base
+                            # (Note: idéalement on garde séparé mais ici on s'assure que l'athlète existe)
+                            if r["Nom"] and r["Année Naissance"]:
+                                save_athlete(r["Nom"], r["Prénom"], "", r["Année Naissance"], r["Poids (kg)"], r["Sexe (M/F)"])
+                        
+                        # Mapping colonnes pour PreInscriptions
+                        final_save = to_save.rename(columns={"Compétition": "Competition_Cible", "Nom": "Nom", "Prénom": "Prenom", "Année Naissance": "Annee", "Poids (kg)": "Poids", "Sexe (M/F)": "Sexe", "Catégorie Calculée": "Categorie"})
+                        final_save = final_save[["Competition_Cible", "Nom", "Prenom", "Annee", "Poids", "Sexe", "Categorie"]]
+                        
+                        # Lecture existant pour éviter doublons dans le Sheet
+                        current_pre = get_preinscriptions_db()
+                        # On concatène et sauvegarde
+                        save_data(pd.concat([current_pre, final_save], ignore_index=True), "PreInscriptions", [])
+                        st.toast("Inscriptions sauvegardées automatiquement avant import.", icon="💾")
+                
+                # 2. Importation dans le Live
+                pre = get_preinscriptions_db() # On relit la base fraîchement mise à jour
                 sub = pre[pre['Competition_Cible'] == nom_c]
+                
                 if not sub.empty:
                     cur = get_live_data()
                     rows = []
@@ -334,14 +337,14 @@ with tab_coach:
                                 "Combattant": nom_complet, 
                                 "Aire":0, "Numero":0, "Casque":"Rouge", 
                                 "Statut":"A venir", "Palmares":"", 
-                                "Details_Tour": r.get('Categorie', ''), # Stockage catégorie
+                                "Details_Tour": r.get('Categorie', ''), 
                                 "Medaille_Actuelle":""
                             })
                     if rows: 
                         save_data(pd.concat([cur, pd.DataFrame(rows)], ignore_index=True), "Feuille 1", [])
-                        st.success(f"✅ {len(rows)} importés !"); st.rerun()
-                    else: st.warning("Déjà dans le Live.")
-                else: st.warning("Aucun inscrit pour cet événement.")
+                        st.success(f"✅ {len(rows)} inscrits envoyés au Dispatch !"); st.rerun()
+                    else: st.warning("Tous les inscrits sont déjà dans le Live.")
+                else: st.warning("Aucun inscrit trouvé (même après sauvegarde).")
             
             st.write("---")
             st.markdown("#### 2. Inscriptions")
@@ -390,45 +393,16 @@ with tab_coach:
                 st.link_button("Envoyer", f"https://wa.me/?text={urllib.parse.quote('📋 INSCRIPTIONS\\n\\n' + txt)}")
             
             if cs.button("💾 Sauvegarder"):
-                # LOGIQUE ANTI DOUBLON V39
+                # Sauvegarde manuelle classique (toujours utile)
                 pre = get_preinscriptions_db()
                 to_save = edited.copy()
-                
-                # Update base athlètes
                 for _, r in to_save.iterrows():
                     if r["Nom"] and r["Année Naissance"]:
                         save_athlete(r["Nom"], r["Prénom"], "", r["Année Naissance"], r["Poids (kg)"], r["Sexe (M/F)"])
-                
                 final_save = to_save.rename(columns={"Compétition": "Competition_Cible", "Nom": "Nom", "Prénom": "Prenom", "Année Naissance": "Annee", "Poids (kg)": "Poids", "Sexe (M/F)": "Sexe", "Catégorie Calculée": "Categorie"})
                 final_save = final_save[["Competition_Cible", "Nom", "Prenom", "Annee", "Poids", "Sexe", "Categorie"]]
-                
-                new_rows = []
-                count_skipped = 0
-                
-                if not pre.empty:
-                    for i, new_r in final_save.iterrows():
-                        # Check Doublon: Compet + Nom + Prenom + Poids
-                        match = pre[
-                            (pre['Competition_Cible'] == new_r['Competition_Cible']) &
-                            (pre['Nom'] == new_r['Nom']) &
-                            (pre['Prenom'] == new_r['Prenom']) &
-                            (pre['Poids'] == new_r['Poids']) # On vérifie aussi le poids car on peut s'inscrire dans 2 caté diff
-                        ]
-                        if match.empty:
-                            new_rows.append(new_r)
-                        else:
-                            count_skipped += 1
-                else:
-                    new_rows = final_save.to_dict('records')
-
-                if new_rows:
-                    save_data(pd.concat([pre, pd.DataFrame(new_rows)], ignore_index=True), "PreInscriptions", [])
-                    st.success(f"✅ {len(new_rows)} sauvegardés !")
-                
-                if count_skipped > 0:
-                    st.info(f"ℹ️ {count_skipped} doublons ignorés.")
-                
-                st.session_state['inscr_df'] = pd.DataFrame(columns=edited.columns)
+                save_data(pd.concat([pre, final_save], ignore_index=True), "PreInscriptions", [])
+                st.success("Sauvegardé"); st.session_state['inscr_df'] = pd.DataFrame(columns=edited.columns)
 
             st.write("---")
             if st.button("🗑️ Reset Live"): save_data(pd.DataFrame(columns=live.columns), "Feuille 1", []); st.rerun()

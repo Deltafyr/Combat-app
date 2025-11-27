@@ -7,7 +7,7 @@ import urllib.parse
 import time
 
 # --- CONFIGURATION & DESIGN ---
-st.set_page_config(page_title="Fight Tracker V31", page_icon="🥊", layout="wide")
+st.set_page_config(page_title="Fight Tracker V32", page_icon="🥊", layout="wide")
 
 st.markdown("""
     <style>
@@ -75,7 +75,11 @@ def get_worksheet_safe(name, cols):
     try: sh = client.open("suivi_combats")
     except: return None
     try: ws = sh.worksheet(name)
-    except: ws = sh.add_worksheet(name, 1000, len(cols)+2); ws.append_row(cols); time.sleep(1)
+    except: 
+        # Création avec en-têtes obligatoires
+        ws = sh.add_worksheet(name, 1000, len(cols)+2)
+        ws.append_row(cols)
+        time.sleep(1)
     return ws
 
 @st.cache_data(ttl=5)
@@ -99,7 +103,6 @@ def save_data(df, sheet_name, cols_def):
         ws.update([df.columns.values.tolist()] + df.values.tolist())
         fetch_data.clear()
 
-# --- FONCTION CORRIGÉE : SAUVEGARDE ATHLÈTE ---
 def save_athlete(nom_complet, titre, annee, poids, sexe):
     """Met à jour ou crée un athlète dans la base"""
     ws = get_worksheet_safe("Athletes", ["Nom", "Titre_Honorifique", "Annee_Naissance", "Poids", "Sexe"])
@@ -107,28 +110,21 @@ def save_athlete(nom_complet, titre, annee, poids, sexe):
         df = pd.DataFrame(ws.get_all_records())
         if "Nom" not in df.columns: df = pd.DataFrame(columns=["Nom", "Titre_Honorifique", "Annee_Naissance", "Poids", "Sexe"])
         
-        # On nettoie le nom pour la recherche
         nom_complet = str(nom_complet).strip()
         
         if nom_complet in df['Nom'].values:
-            # Mise à jour
             idx = df[df['Nom'] == nom_complet].index[0]
             if titre: df.at[idx, "Titre_Honorifique"] = titre
             if annee: df.at[idx, "Annee_Naissance"] = annee
             if poids: df.at[idx, "Poids"] = poids
             if sexe: df.at[idx, "Sexe"] = sexe
         else:
-            # Création
             new_row = pd.DataFrame([{
-                "Nom": nom_complet, 
-                "Titre_Honorifique": titre,
-                "Annee_Naissance": annee,
-                "Poids": poids,
-                "Sexe": sexe
+                "Nom": nom_complet, "Titre_Honorifique": titre,
+                "Annee_Naissance": annee, "Poids": poids, "Sexe": sexe
             }])
             df = pd.concat([df, new_row], ignore_index=True)
         
-        # Sauvegarde brute pour éviter les conflits
         ws.clear()
         ws.update([df.columns.values.tolist()] + df.values.tolist())
         fetch_data.clear()
@@ -269,6 +265,7 @@ with tab_coach:
             c1, c2 = st.columns(2)
             cal_opts = get_calendar_db()
             opts = cal_opts['Nom_Competition'].tolist() if not cal_opts.empty else ["Entraînement"]
+            
             with c1: nom_c = st.selectbox("Événement", opts)
             with c2:
                 with st.popover("➕ Créer"):
@@ -293,9 +290,47 @@ with tab_coach:
                 else: st.warning("Aucun inscrit.")
             
             st.write("---")
-            st.markdown("#### 2. Inscriptions")
+            st.markdown("#### 2. Inscriptions & Pesée")
             if 'inscr_df' not in st.session_state: st.session_state['inscr_df'] = pd.DataFrame(columns=["Compétition", "Nom", "Prénom", "Année Naissance", "Poids (kg)", "Sexe (M/F)", "Catégorie Calculée"])
             
+            # --- NOUVEAU : CHARGEMENT DEPUIS LA BASE ATHLETES ---
+            with st.expander("📂 Charger depuis la Base Athlètes (Rapide)"):
+                db_ath = get_athletes_db()
+                if not db_ath.empty:
+                    # Liste déroulante multiselect
+                    selected_athletes = st.multiselect("Sélectionnez les participants :", db_ath['Nom'].unique())
+                    if st.button("📥 Ajouter à la liste d'inscription"):
+                        # On récupère les infos
+                        to_add = []
+                        for ath_name in selected_athletes:
+                            info = db_ath[db_ath['Nom'] == ath_name].iloc[0]
+                            # Découpage basique Nom/Prénom (Dernier mot = Prénom)
+                            parts = str(ath_name).split()
+                            if len(parts) > 1:
+                                nom_seul = " ".join(parts[:-1])
+                                prenom_seul = parts[-1]
+                            else:
+                                nom_seul = ath_name
+                                prenom_seul = ""
+                            
+                            to_add.append({
+                                "Compétition": nom_c,
+                                "Nom": nom_seul,
+                                "Prénom": prenom_seul,
+                                "Année Naissance": info['Annee_Naissance'],
+                                "Poids (kg)": info['Poids'],
+                                "Sexe (M/F)": info['Sexe'],
+                                "Catégorie Calculée": calculer_categorie(info['Annee_Naissance'], info['Poids'], info['Sexe'])
+                            })
+                        
+                        if to_add:
+                            new_df = pd.concat([st.session_state['inscr_df'], pd.DataFrame(to_add)], ignore_index=True)
+                            st.session_state['inscr_df'] = new_df
+                            st.rerun()
+                else:
+                    st.warning("Base Athlètes vide.")
+
+            # Editeur Principal
             edited = st.data_editor(st.session_state['inscr_df'], num_rows="dynamic", use_container_width=True, column_config={
                 "Compétition": st.column_config.Column(disabled=True),
                 "Sexe (M/F)": st.column_config.SelectboxColumn(options=["M", "F"]),
@@ -305,23 +340,8 @@ with tab_coach:
             
             cm, cw, cs = st.columns(3)
             if cm.button("✨ Remplir & Calculer"):
-                df_ath = get_athletes_db()
                 for i, row in edited.iterrows():
                     edited.at[i, "Compétition"] = nom_c
-                    # Construction du nom complet pour la recherche en base
-                    if row["Nom"] and row["Prénom"]:
-                        # Standardisation : Nom MAJ + Prénom Cap
-                        full_name = f"{str(row['Nom']).upper()} {str(row['Prénom']).capitalize()}".strip()
-                        
-                        # Recherche auto si infos manquantes
-                        if not df_ath.empty:
-                            f = df_ath[df_ath['Nom'] == full_name]
-                            if not f.empty:
-                                info = f.iloc[0]
-                                if not row["Année Naissance"]: edited.at[i, "Année Naissance"] = info['Annee_Naissance']
-                                if not row["Poids (kg)"]: edited.at[i, "Poids (kg)"] = info['Poids']
-                                if not row["Sexe (M/F)"]: edited.at[i, "Sexe (M/F)"] = info['Sexe']
-                    
                     if edited.at[i, "Année Naissance"] and edited.at[i, "Poids (kg)"]:
                         edited.at[i, "Catégorie Calculée"] = calculer_categorie(edited.at[i, "Année Naissance"], edited.at[i, "Poids (kg)"], edited.at[i, "Sexe (M/F)"])
                 st.session_state['inscr_df'] = edited; st.rerun()
@@ -332,19 +352,14 @@ with tab_coach:
             
             if cs.button("💾 Sauvegarder"):
                 pre = get_preinscriptions_db()
-                # On prépare la sauvegarde : Fusion Nom+Prénom pour la base
                 to_save = edited.copy()
-                # On crée la colonne unique "Nom" attendue par la base
                 to_save['Nom_Complet'] = to_save.apply(lambda x: f"{str(x['Nom']).upper()} {str(x['Prénom']).capitalize()}", axis=1)
                 
-                # Mise à jour base athlètes
                 for _, r in to_save.iterrows():
                     if r["Nom_Complet"] and r["Année Naissance"]:
                         save_athlete(r["Nom_Complet"], "", r["Année Naissance"], r["Poids (kg)"], r["Sexe (M/F)"])
                 
-                # Sauvegarde Inscriptions (Mapping colonnes)
                 final_save = to_save.rename(columns={"Compétition": "Competition_Cible", "Nom_Complet": "Nom", "Année Naissance": "Annee", "Poids (kg)": "Poids", "Sexe (M/F)": "Sexe", "Catégorie Calculée": "Categorie"})
-                # On garde que les colonnes utiles
                 final_save = final_save[["Competition_Cible", "Nom", "Annee", "Poids", "Sexe", "Categorie"]]
                 
                 save_data(pd.concat([pre, final_save], ignore_index=True), "PreInscriptions", [])

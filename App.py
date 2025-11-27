@@ -6,8 +6,8 @@ from datetime import datetime, date
 import urllib.parse
 import time
 
-# --- CONFIGURATION ---
-st.set_page_config(page_title="Fight Tracker V37", page_icon="🥊", layout="wide")
+# --- CONFIGURATION & DESIGN ---
+st.set_page_config(page_title="Fight Tracker V38", page_icon="🥊", layout="wide")
 
 st.markdown("""
     <style>
@@ -17,13 +17,16 @@ st.markdown("""
             border-radius: 8px; padding: 12px; margin-bottom: 8px; 
             border-left: 4px solid #555; box-shadow: 0 2px 5px rgba(0,0,0,0.3);
         }
+        .card-termine { opacity: 0.6; filter: grayscale(0.8); border-left: 4px solid #333 !important; }
         .header-line { display: flex; justify-content: space-between; align-items: baseline; }
         .combat-num { font-style: italic; font-size: 1.1em; color: #ddd; font-weight:bold;}
         .combat-aire { background: #FFD700; color:black; padding: 2px 8px; border-radius: 10px; font-size: 0.85em; font-weight: bold; }
         .fighter-name { font-size: 1.3em; font-weight: 700; color: #fff; }
         .honor-title { font-size: 0.8em; color: #FFD700; font-style: italic; display:block; opacity:0.8;}
+        
         .corner-red { color: #FF4B4B; border: 1px solid #FF4B4B; padding: 2px 6px; border-radius: 4px; font-size: 0.8em; margin-right: 5px;}
         .corner-blue { color: #2196F3; border: 1px solid #2196F3; padding: 2px 6px; border-radius: 4px; font-size: 0.8em; margin-right: 5px;}
+        .stToast { background-color: #00C853 !important; color: white !important; }
         .dispatch-box { border: 2px dashed #FFD700; padding: 15px; border-radius: 10px; background-color: #2b2d35; margin-bottom: 20px; }
     </style>
 """, unsafe_allow_html=True)
@@ -59,7 +62,6 @@ def calculer_categorie(annee, poids, sexe):
         elif cat_age in ["Junior", "Senior", "Vétéran"]:
             if sexe == "F": limites = [48, 52, 56, 60, 65, 70]
             else: limites = [57, 63, 69, 74, 79, 84, 89, 94]
-        
         cat_poids = "Hors cat."
         if limites and poids > limites[-1]: cat_poids = f"+{limites[-1]}kg"
         else:
@@ -68,29 +70,48 @@ def calculer_categorie(annee, poids, sexe):
         return f"{cat_age} {sexe} {cat_poids}"
     except: return "?"
 
-# --- BDD ROBUSTE ---
+# --- BDD ROBUSTE V38 (ANTI-CRASH) ---
 def get_worksheet_safe(name, cols):
     client = get_client()
-    try: sh = client.open("suivi_combats")
-    except: return None
-    try: ws = sh.worksheet(name)
-    except: 
-        ws = sh.add_worksheet(name, 1000, len(cols)+2)
-        if cols: ws.append_row(cols)
-        time.sleep(1)
-    return ws
+    try: 
+        sh = client.open("suivi_combats")
+    except Exception as e:
+        st.error(f"Erreur connexion Sheet: {e}")
+        return None
 
-@st.cache_data(ttl=5)
-def fetch_data(sheet_name, expected_cols):
-    ws = get_worksheet_safe(sheet_name, expected_cols)
+    # NOUVELLE LOGIQUE : Lister avant d'agir
+    try:
+        # On récupère la liste des titres existants
+        existing_titles = [s.title for s in sh.worksheets()]
+        
+        if name in existing_titles:
+            # S'il existe, on l'ouvre simplement
+            return sh.worksheet(name)
+        else:
+            # S'il n'existe vraiment pas, on le crée
+            ws = sh.add_worksheet(name, 1000, len(cols)+2)
+            if cols: ws.append_row(cols)
+            return ws
+            
+    except Exception as e:
+        # Si erreur bizarre (quota), on attend et on réessaie une fois
+        time.sleep(2)
+        try:
+            return sh.worksheet(name)
+        except:
+            return None
+
+@st.cache_data(ttl=10) # Augmentation TTL pour soulager API
+def fetch_data(sheet_name, cols):
+    ws = get_worksheet_safe(sheet_name, cols)
     if ws:
         try: 
             df = pd.DataFrame(ws.get_all_records())
-            for col in expected_cols:
+            for col in cols:
                 if col not in df.columns: df[col] = ""
             return df
-        except: return pd.DataFrame(columns=expected_cols)
-    return pd.DataFrame(columns=expected_cols)
+        except: return pd.DataFrame(columns=cols)
+    return pd.DataFrame(columns=cols)
 
 def get_live_data(): return fetch_data("Feuille 1", ["Combattant", "Aire", "Numero", "Casque", "Statut", "Palmares", "Details_Tour", "Medaille_Actuelle"])
 def get_history_data(): return fetch_data("Historique", ["Competition", "Date", "Combattant", "Medaille"])
@@ -133,21 +154,17 @@ def save_athlete(nom, prenom, titre, annee, poids, sexe):
         ws.clear(); ws.update([df.columns.values.tolist()] + df.values.tolist()); fetch_data.clear()
 
 def process_end_match(live_df, idx, resultat, nom_compet, date_compet, target_evt):
-    # 1. Update Live
     live_df.at[idx, 'Statut'] = "Terminé"
     live_df.at[idx, 'Medaille_Actuelle'] = resultat
     live_df.at[idx, 'Palmares'] = resultat
     save_data(live_df, "Feuille 1", [])
     
-    # 2. Archive Historique (Garantie)
     nom_full = live_df.at[idx, 'Combattant']
     hist = get_history_data()
-    # Sécurité pour ne pas archiver du vide
     if nom_full and resultat:
         new_entry = pd.DataFrame([{"Competition": nom_compet, "Date": str(date_compet), "Combattant": nom_full, "Medaille": resultat}])
         save_data(pd.concat([hist, new_entry], ignore_index=True), "Historique", ["Competition", "Date", "Combattant", "Medaille"])
     
-    # 3. Qualif Auto
     if target_evt and resultat in ["🥇 Or", "🥈 Argent"]:
         ath = get_athletes_db()
         pre = get_preinscriptions_db()
@@ -191,7 +208,7 @@ with tab_public:
         
         st.markdown(f"<h2 style='text-align:center; color:#FFD700;'>{st.session_state.get('Config_Compet', 'Compétition en cours')}</h2>", unsafe_allow_html=True)
         
-        if df.empty: st.info("Les combats n'ont pas encore commencé (Tirage en cours).")
+        if df.empty: st.info("Les combats n'ont pas encore commencé.")
         
         for i, row in df.iterrows():
             if row['Statut'] != "Terminé":
@@ -241,16 +258,14 @@ with tab_coach:
                 
                 if not waiting_list.empty:
                     st.markdown("### ⚠️ À PROGRAMMER (Tirage)")
-                    st.info("Validez l'Aire et le N° pour afficher le boxeur sur le Live.")
-                    
                     st.markdown('<div class="dispatch-box">', unsafe_allow_html=True)
                     for idx, row in waiting_list.iterrows():
                         c_nom, c_aire, c_num, c_casque, c_btn = st.columns([2, 1, 1, 2, 1])
                         with c_nom:
                             st.markdown(f"**🥊 {row['Combattant']}**")
-                            # Afficher la catégorie pour aider au dispatch
+                            # Afficher la catégorie stockée en Details_Tour lors de l'import
                             cat_info = row.get('Details_Tour', '')
-                            if cat_info: st.caption(f"Cat: {cat_info}")
+                            if cat_info: st.caption(f"{cat_info}")
                         
                         na = c_aire.number_input("Aire", value=1, min_value=1, key=f"wa_{idx}", label_visibility="collapsed")
                         nn = c_num.number_input("N°", value=1, min_value=1, key=f"wn_{idx}", label_visibility="collapsed")
@@ -315,28 +330,23 @@ with tab_coach:
             # --- BOUTON IMPORT ---
             if st.button("📥 Importer les Inscrits"):
                 pre = get_preinscriptions_db()
-                # Filtrage strict sur Competition_Cible
                 sub = pre[pre['Competition_Cible'] == nom_c]
-                
                 if not sub.empty:
                     cur = get_live_data()
                     rows = []
                     for _, r in sub.iterrows():
-                        # Fusion Nom + Prenom
                         nom_complet = f"{r['Nom']} {r['Prenom']}".strip()
                         if nom_complet and (cur.empty or nom_complet not in cur['Combattant'].values):
                             rows.append({
                                 "Combattant": nom_complet, 
-                                "Aire":0, "Numero":0, "Casque":"Rouge", "Statut":"A venir", 
-                                "Palmares":"", 
-                                "Details_Tour": r.get('Categorie', ''), # On stocke la caté
+                                "Aire":0, "Numero":0, "Casque":"Rouge", 
+                                "Statut":"A venir", "Palmares":"", 
+                                "Details_Tour": r.get('Categorie', ''), # Stockage catégorie
                                 "Medaille_Actuelle":""
                             })
-                    if rows: 
-                        save_data(pd.concat([cur, pd.DataFrame(rows)], ignore_index=True), "Feuille 1", [])
-                        st.success(f"✅ {len(rows)} inscrits importés dans la Zone Dispatch !"); st.rerun()
-                    else: st.warning("Ces inscrits sont déjà dans le Live.")
-                else: st.warning("Aucun inscrit pour cet événement dans l'onglet PreInscriptions.")
+                    if rows: save_data(pd.concat([cur, pd.DataFrame(rows)], ignore_index=True), "Feuille 1", []); st.success(f"✅ {len(rows)} importés !"); st.rerun()
+                    else: st.warning("Déjà dans le Live.")
+                else: st.warning("Aucun inscrit pour cet événement.")
             
             st.write("---")
             st.markdown("#### 2. Inscriptions")
@@ -347,7 +357,6 @@ with tab_coach:
                 if not db_ath.empty:
                     db_ath['Full_Name'] = db_ath.apply(lambda x: f"{x['Nom']} {x['Prenom']}", axis=1)
                     selected_athletes = st.multiselect("Sélectionnez :", db_ath['Full_Name'].unique())
-                    
                     if st.button("📥 Ajouter"):
                         to_add = []
                         for full in selected_athletes:
@@ -391,10 +400,8 @@ with tab_coach:
                 for _, r in to_save.iterrows():
                     if r["Nom"] and r["Année Naissance"]:
                         save_athlete(r["Nom"], r["Prénom"], "", r["Année Naissance"], r["Poids (kg)"], r["Sexe (M/F)"])
-                
                 final_save = to_save.rename(columns={"Compétition": "Competition_Cible", "Nom": "Nom", "Prénom": "Prenom", "Année Naissance": "Annee", "Poids (kg)": "Poids", "Sexe (M/F)": "Sexe", "Catégorie Calculée": "Categorie"})
                 final_save = final_save[["Competition_Cible", "Nom", "Prenom", "Annee", "Poids", "Sexe", "Categorie"]]
-                
                 save_data(pd.concat([pre, final_save], ignore_index=True), "PreInscriptions", [])
                 st.success("Sauvegardé"); st.session_state['inscr_df'] = pd.DataFrame(columns=edited.columns)
 

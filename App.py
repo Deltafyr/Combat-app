@@ -14,13 +14,11 @@ except ImportError:
     pdfplumber = None
 
 # --- CONFIGURATION & DESIGN ---
-st.set_page_config(page_title="Fight Tracker V60", page_icon="🥊", layout="wide")
+st.set_page_config(page_title="Fight Tracker V61", page_icon="🥊", layout="wide")
 
 st.markdown("""
     <style>
         html, body, [class*="css"]  { font-family: 'Roboto', sans-serif; font-size: 14px; }
-        
-        /* CARTE PUBLIC */
         .combat-card {
             background: linear-gradient(145deg, #1E1E1E, #252525);
             border-radius: 8px; padding: 12px; margin-bottom: 8px; 
@@ -112,7 +110,6 @@ def import_sportmember_smart(uploaded_file, history_df, existing_athletes_df):
         df.columns = df.columns.str.strip().str.lower()
         cleaned_data = []
         records = df.to_dict('records')
-        
         for row in records:
             keys = row.keys()
             nom_key = next((k for k in keys if 'nom' in k and 'pré' not in k), None)
@@ -138,7 +135,6 @@ def import_sportmember_smart(uploaded_file, history_df, existing_athletes_df):
                 if not existing_athletes_df.empty:
                     match = existing_athletes_df[(existing_athletes_df['Nom'] == n_clean) & (existing_athletes_df['Prenom'] == p_clean)]
                     if not match.empty: poids_exist = match.iloc[0]['Poids']
-                
                 titre_gen = ""
                 if not history_df.empty:
                     hist_match = history_df[history_df['Combattant'].str.upper().str.contains(n_clean, na=False)]
@@ -154,15 +150,9 @@ def import_sportmember_smart(uploaded_file, history_df, existing_athletes_df):
                             if icon and year: titles_list.append(f"{icon} {year}")
                             elif icon: titles_list.append(f"{icon}")
                         if titles_list: titre_gen = " • ".join(titles_list[:5])
-
-                cleaned_data.append({
-                    "Nom": n_clean, "Prenom": p_clean, "Annee_Naissance": annee,
-                    "Sexe": sexe, "Poids": poids_exist, "Titre_Honorifique": titre_gen
-                })
+                cleaned_data.append({"Nom": n_clean, "Prenom": p_clean, "Annee_Naissance": annee, "Sexe": sexe, "Poids": poids_exist, "Titre_Honorifique": titre_gen})
         return pd.DataFrame(cleaned_data)
-    except Exception as e:
-        st.error(f"Erreur lecture fichier: {e}")
-        return pd.DataFrame()
+    except Exception as e: st.error(f"Erreur lecture: {e}"); return pd.DataFrame()
 
 # --- IMPORT PDF ---
 def parse_pdf_ffkmda(pdf_file, club_filter_keyword):
@@ -198,7 +188,7 @@ def parse_pdf_ffkmda(pdf_file, club_filter_keyword):
             return pd.DataFrame(club_data)
     except Exception as e: st.error(f"Erreur PDF: {e}"); return pd.DataFrame()
 
-# --- BDD ---
+# --- BDD ROBUSTE ---
 def get_worksheet_safe(name, cols):
     client = get_client()
     try: sh = client.open("suivi_combats")
@@ -344,13 +334,17 @@ with tab_coach:
                     st.markdown("### ⚠️ À PROGRAMMER")
                     st.markdown('<div class="dispatch-box">', unsafe_allow_html=True)
                     for idx, row in waiting_list.iterrows():
-                        c_nom, c_aire, c_num, c_casque, c_act = st.columns([2, 1, 1, 2, 2])
+                        c_nom, c_aire, c_num, c_casque, c_act = st.columns([3, 1, 1, 2, 2])
                         with c_nom:
                             st.markdown(f"**🥊 {row['Combattant']}**")
                             if row.get('Details_Tour'): st.caption(f"{row['Details_Tour']}")
+                        
                         def_aire = 1
-                        if 'Aire_PDF' in st.session_state and row['Combattant'] in st.session_state['Aire_PDF']:
+                        if 'Aire' in row and pd.notna(row['Aire']) and int(row['Aire']) > 0:
+                             def_aire = int(row['Aire'])
+                        elif 'Aire_PDF' in st.session_state and row['Combattant'] in st.session_state['Aire_PDF']:
                              def_aire = st.session_state['Aire_PDF'][row['Combattant']]
+                        
                         na = c_aire.number_input("Aire", value=int(def_aire), min_value=1, key=f"wa_{idx}", label_visibility="collapsed")
                         nn = c_num.number_input("N°", value=1, min_value=1, key=f"wn_{idx}", label_visibility="collapsed")
                         nc = c_casque.radio("Casque", ["Rouge", "Bleu"], horizontal=True, key=f"wc_{idx}", label_visibility="collapsed")
@@ -413,40 +407,27 @@ with tab_coach:
             qualif = st.checkbox("Qualificatif ?")
             st.session_state['Target_Compet'] = st.selectbox("Vers", opts) if qualif else None
             
-            if st.button("📥 Importer les Inscrits"):
-                if 'inscr_df' in st.session_state and not st.session_state['inscr_df'].empty:
-                    to_save = st.session_state['inscr_df'].copy()
-                    to_save = to_save[to_save["Nom"] != ""]
-                    if not to_save.empty:
-                        for _, r in to_save.iterrows():
-                            if r["Nom"] and r["Année Naissance"]: save_athlete(r["Nom"], r["Prénom"], "", r["Année Naissance"], r["Poids (kg)"], r["Sexe (M/F)"])
-                        final_save = to_save.rename(columns={"Compétition": "Competition_Cible", "Nom": "Nom", "Prénom": "Prenom", "Année Naissance": "Annee", "Poids (kg)": "Poids", "Sexe (M/F)": "Sexe", "Catégorie Calculée": "Categorie"})
-                        current_pre = get_preinscriptions_db()
-                        combined = pd.concat([current_pre, final_save[["Competition_Cible", "Nom", "Prenom", "Annee", "Poids", "Sexe", "Categorie"]]], ignore_index=True)
-                        dedup = deduplicate_dataframe(combined, ["Competition_Cible", "Nom", "Prenom"])
-                        save_data(dedup, "PreInscriptions", [])
-                        st.toast("Sauvegardé auto", icon="💾")
-                
-                pre = get_preinscriptions_db()
-                sub = pre[pre['Competition_Cible'] == nom_c]
-                if not sub.empty:
-                    cur = get_live_data()
-                    rows = []
-                    st.session_state['Aire_PDF'] = {} 
-                    for _, r in sub.iterrows():
-                        nom_complet = f"{r['Nom']} {r['Prenom']}".strip()
-                        if 'Aire_PDF' in r and r['Aire_PDF']: st.session_state['Aire_PDF'][nom_complet] = int(r['Aire_PDF'])
-                        if nom_complet and (cur.empty or nom_complet not in cur['Combattant'].values):
-                            rows.append({"Combattant": nom_complet, "Aire":0, "Numero":0, "Casque":"Rouge", "Statut":"A venir", "Palmares":"", "Details_Tour": r.get('Categorie', ''), "Medaille_Actuelle":""})
-                    if rows: save_data(pd.concat([cur, pd.DataFrame(rows)], ignore_index=True), "Feuille 1", []); st.success(f"✅ {len(rows)} importés !"); st.rerun()
-                    else: st.warning("Déjà dans le Live.")
-                else: st.warning("Aucun inscrit.")
-            
             st.write("---")
-            st.markdown("#### 2. Inscriptions & PDF")
+            st.markdown("#### 2. Inscriptions")
             if 'inscr_df' not in st.session_state: st.session_state['inscr_df'] = pd.DataFrame(columns=["Compétition", "Nom", "Prénom", "Année Naissance", "Poids (kg)", "Sexe (M/F)", "Catégorie Calculée"])
             
-            with st.expander("📂 Importer PDF Convocation (V58)"):
+            with st.expander("📂 Charger depuis la Base Athlètes"):
+                db_ath = get_athletes_db()
+                if not db_ath.empty:
+                    db_ath['Full_Name'] = db_ath.apply(lambda x: f"{x['Nom']} {x['Prenom']}", axis=1)
+                    selected_athletes = st.multiselect("Sélectionnez :", db_ath['Full_Name'].unique())
+                    if st.button("📥 Ajouter"):
+                        to_add = []
+                        for full in selected_athletes:
+                            info = db_ath[db_ath['Full_Name'] == full].iloc[0]
+                            to_add.append({"Compétition": nom_c, "Nom": info['Nom'], "Prénom": info['Prenom'], "Année Naissance": info['Annee_Naissance'], "Poids (kg)": info['Poids'], "Sexe (M/F)": info['Sexe'], "Catégorie Calculée": calculer_categorie(info['Annee_Naissance'], info['Poids'], info['Sexe'])})
+                        if to_add: 
+                            new_df = pd.concat([st.session_state['inscr_df'], pd.DataFrame(to_add)], ignore_index=True)
+                            st.session_state['inscr_df'] = deduplicate_dataframe(new_df, ["Compétition", "Nom", "Prénom"])
+                            st.rerun()
+                else: st.warning("Base vide.")
+            
+            with st.expander("📂 Importer PDF Convocation"):
                 pdf_file = st.file_uploader("Glisser PDF", type="pdf")
                 club_key = st.text_input("Mot clé Club", value="SAINT MAURICE")
                 if pdf_file and club_key:
@@ -470,22 +451,6 @@ with tab_coach:
                             st.success("Transféré !")
                         else: st.warning("Rien trouvé.")
 
-            with st.expander("📂 Charger depuis la Base Athlètes"):
-                db_ath = get_athletes_db()
-                if not db_ath.empty:
-                    db_ath['Full_Name'] = db_ath.apply(lambda x: f"{x['Nom']} {x['Prenom']}", axis=1)
-                    selected_athletes = st.multiselect("Sélectionnez :", db_ath['Full_Name'].unique())
-                    if st.button("📥 Ajouter"):
-                        to_add = []
-                        for full in selected_athletes:
-                            info = db_ath[db_ath['Full_Name'] == full].iloc[0]
-                            to_add.append({"Compétition": nom_c, "Nom": info['Nom'], "Prénom": info['Prenom'], "Année Naissance": info['Annee_Naissance'], "Poids (kg)": info['Poids'], "Sexe (M/F)": info['Sexe'], "Catégorie Calculée": calculer_categorie(info['Annee_Naissance'], info['Poids'], info['Sexe'])})
-                        if to_add: 
-                            new_df = pd.concat([st.session_state['inscr_df'], pd.DataFrame(to_add)], ignore_index=True)
-                            st.session_state['inscr_df'] = deduplicate_dataframe(new_df, ["Compétition", "Nom", "Prénom"])
-                            st.rerun()
-                else: st.warning("Base vide.")
-
             edited = st.data_editor(st.session_state['inscr_df'], num_rows="dynamic", use_container_width=True, column_config={"Compétition": st.column_config.Column(disabled=True), "Sexe (M/F)": st.column_config.SelectboxColumn(options=["M", "F"]), "Année Naissance": st.column_config.NumberColumn(format="%d"), "Poids (kg)": st.column_config.NumberColumn(format="%.1f")})
             
             cm, cw, cs = st.columns(3)
@@ -499,16 +464,47 @@ with tab_coach:
                 txt = "\n".join([f"🏆 {r['Compétition']} | 🥊 {str(r['Nom']).upper()} {r['Prénom']} : {r['Catégorie Calculée']}" for _, r in edited.iterrows() if r['Nom']])
                 st.link_button("Envoyer", f"https://wa.me/?text={urllib.parse.quote('📋 INSCRIPTIONS\\n\\n' + txt)}")
             
-            if cs.button("💾 Sauvegarder"):
+            if cs.button("💾 SAUVEGARDER & ENVOYER AU PILOTAGE"):
                 pre = get_preinscriptions_db()
                 to_save = edited.copy()
-                for _, r in to_save.iterrows():
-                    if r["Nom"] and r["Année Naissance"]: save_athlete(r["Nom"], r["Prénom"], "", r["Année Naissance"], r["Poids (kg)"], r["Sexe (M/F)"])
-                final_save = to_save.rename(columns={"Compétition": "Competition_Cible", "Nom": "Nom", "Prénom": "Prenom", "Année Naissance": "Annee", "Poids (kg)": "Poids", "Sexe (M/F)": "Sexe", "Catégorie Calculée": "Categorie"})
-                combined = pd.concat([pre, final_save[["Competition_Cible", "Nom", "Prenom", "Annee", "Poids", "Sexe", "Categorie"]]], ignore_index=True)
-                dedup = deduplicate_dataframe(combined, ["Competition_Cible", "Nom", "Prenom"])
-                save_data(dedup, "PreInscriptions", [])
-                st.success("Sauvegardé"); st.session_state['inscr_df'] = pd.DataFrame(columns=edited.columns)
+                to_save = to_save[to_save["Nom"] != ""]
+                if not to_save.empty:
+                    # 1. SAVE ATHLETES & PRE-INSCRIPTIONS
+                    for _, r in to_save.iterrows():
+                        if r["Nom"] and r["Année Naissance"]: save_athlete(r["Nom"], r["Prénom"], "", r["Année Naissance"], r["Poids (kg)"], r["Sexe (M/F)"])
+                    final_save = to_save.rename(columns={"Compétition": "Competition_Cible", "Nom": "Nom", "Prénom": "Prenom", "Année Naissance": "Annee", "Poids": "Poids", "Sexe": "Sexe", "Catégorie Calculée": "Categorie", "Aire_PDF": "Aire_Prevue"})
+                    
+                    cols_db = ["Competition_Cible", "Nom", "Prenom", "Annee", "Poids", "Sexe", "Categorie", "Aire_Prevue"]
+                    for c in cols_db:
+                        if c not in final_save.columns: final_save[c] = ""
+                    
+                    combined = pd.concat([pre, final_save[cols_db]], ignore_index=True)
+                    dedup = deduplicate_dataframe(combined, ["Competition_Cible", "Nom", "Prenom"])
+                    save_data(dedup, "PreInscriptions", [])
+                    
+                    # 2. ENVOI AU LIVE DIRECTEMENT
+                    cur_live = get_live_data()
+                    rows_live = []
+                    st.session_state['Aire_PDF'] = {}
+                    
+                    for _, r in to_save.iterrows():
+                        nom_cpl = f"{r['Nom']} {r['Prénom']}".strip()
+                        # Gestion Aire (prio PDF > Manuel)
+                        aire_p = 0
+                        if 'Aire_PDF' in r and pd.notna(r['Aire_PDF']): 
+                            try: aire_p = int(r['Aire_PDF'])
+                            except: pass
+                        if aire_p: st.session_state['Aire_PDF'][nom_cpl] = aire_p
+                        
+                        if nom_cpl and (cur_live.empty or nom_cpl not in cur_live['Combattant'].values):
+                            rows_live.append({"Combattant": nom_cpl, "Aire": aire_p, "Numero":0, "Casque":"Rouge", "Statut":"A venir", "Palmares":"", "Details_Tour": r.get('Catégorie Calculée', ''), "Medaille_Actuelle":""})
+                    
+                    if rows_live:
+                        save_data(pd.concat([cur_live, pd.DataFrame(rows_live)], ignore_index=True), "Feuille 1", [])
+                        st.success(f"✅ {len(rows_live)} envoyés au Pilotage !"); st.balloons()
+                    else:
+                        st.info("Liste sauvegardée. (Déjà présents au Pilotage)")
+                else: st.warning("Liste vide.")
 
             st.write("---")
             if st.button("🗑️ Reset Live"): save_data(pd.DataFrame(columns=live.columns), "Feuille 1", []); st.rerun()

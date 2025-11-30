@@ -15,11 +15,13 @@ except ImportError:
     pdfplumber = None
 
 # --- CONFIGURATION & DESIGN ---
-st.set_page_config(page_title="Fight Tracker V65", page_icon="🥊", layout="wide")
+st.set_page_config(page_title="Fight Tracker V66", page_icon="🥊", layout="wide")
 
 st.markdown("""
     <style>
         html, body, [class*="css"]  { font-family: 'Roboto', sans-serif; font-size: 14px; }
+        
+        /* CARTE PUBLIC */
         .combat-card {
             background: linear-gradient(145deg, #1E1E1E, #252525);
             border-radius: 8px; padding: 12px; margin-bottom: 8px; 
@@ -34,16 +36,28 @@ st.markdown("""
         .corner-red { color: #FF4B4B; border: 1px solid #FF4B4B; padding: 2px 6px; border-radius: 4px; font-size: 0.8em; margin-right: 5px;}
         .corner-blue { color: #2196F3; border: 1px solid #2196F3; padding: 2px 6px; border-radius: 4px; font-size: 0.8em; margin-right: 5px;}
         .stToast { background-color: #00C853 !important; color: white !important; }
-        .dispatch-capsule {
+        
+        /* CAPSULE PILOTAGE (COACH) */
+        .pilot-capsule {
             background-color: #2b2d35;
-            border: 1px solid #444;
+            border: 1px solid #555;
             border-radius: 12px;
             padding: 15px;
             margin-bottom: 15px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
         }
-        .capsule-header { font-weight: bold; font-size: 1.1em; color: white; margin-bottom: 5px; border-bottom: 1px solid #444; padding-bottom: 5px; }
-        .capsule-meta { font-size: 0.8em; color: #aaa; font-style: italic; }
+        .capsule-name {
+            font-size: 1.2em;
+            font-weight: bold;
+            color: white;
+            border-bottom: 1px solid #444;
+            padding-bottom: 8px;
+            margin-bottom: 10px;
+        }
+        .capsule-cat {
+            font-size: 0.8em; color: #aaa; float: right; font-weight: normal; font-style: italic;
+        }
+        
         .stat-box { background: #262730; padding: 15px; border-radius: 10px; text-align: center; border: 1px solid #444; }
     </style>
 """, unsafe_allow_html=True)
@@ -216,7 +230,9 @@ def fetch_data(sheet_name, expected_cols):
     if ws:
         try: 
             df = pd.DataFrame(ws.get_all_records())
-            if sheet_name == "Feuille 1" and "ID" not in df.columns: df["ID"] = [str(uuid.uuid4()) for _ in range(len(df))]
+            # SECURISATION ID
+            if sheet_name == "Feuille 1" and "ID" not in df.columns:
+                df["ID"] = [str(uuid.uuid4()) for _ in range(len(df))]
             for col in expected_cols:
                 if col not in df.columns: df[col] = ""
             return df
@@ -258,7 +274,7 @@ def save_athlete(nom, prenom, titre, annee, poids, sexe):
         ws.clear(); ws.update([df.columns.values.tolist()] + df.values.tolist()); fetch_data.clear()
 
 def process_end_match(live_df, idx, resultat, nom_compet, date_compet, target_evt):
-    # Protection ID
+    # Utilisation ID pour stabilité
     row_id = live_df.at[idx, 'ID']
     live_df.loc[live_df['ID'] == row_id, 'Statut'] = "Terminé"
     live_df.loc[live_df['ID'] == row_id, 'Medaille_Actuelle'] = resultat
@@ -344,19 +360,18 @@ with tab_coach:
             st.caption(f"Événement : **{st.session_state.get('Config_Compet', 'Non Défini')}**")
             live = get_live_data()
             if not live.empty:
-                # ZONE DISPATCH
+                # ZONE DISPATCH CAPSULES
                 live['Numero'] = pd.to_numeric(live['Numero'], errors='coerce').fillna(0)
                 waiting_list = live[(live['Statut'] != "Terminé") & (live['Numero'] == 0)]
                 
                 if not waiting_list.empty:
                     st.markdown("### ⚠️ À PROGRAMMER")
-                    
                     for idx, row in waiting_list.iterrows():
+                        # CONTENEUR CAPSULE
                         with st.container():
                             st.markdown(f"""
-                            <div class="dispatch-capsule">
-                                <div class="capsule-header">{row['Combattant']}</div>
-                                <div class="capsule-meta">{row.get('Details_Tour', '')}</div>
+                            <div class="dispatch-box">
+                                <div class="fighter-name" style="font-size:1.2em;">{row['Combattant']} <span style="font-size:0.7em; color:#aaa; font-style:italic;">{row.get('Details_Tour', '')}</span></div>
                             </div>
                             """, unsafe_allow_html=True)
                             
@@ -370,16 +385,16 @@ with tab_coach:
                             nn = c2.number_input("N°", value=1, min_value=1, key=f"wn_{row['ID']}", label_visibility="collapsed")
                             nc = c3.radio("Coin", ["Rouge", "Bleu"], horizontal=True, key=f"wc_{row['ID']}", label_visibility="collapsed")
                             
-                            if c4.button("GO", key=f"wb_{row['ID']}", type="primary", use_container_width=True):
+                            if c4.button("GO", key=f"go_{row['ID']}", type="primary", use_container_width=True):
                                 live.loc[live['ID'] == row['ID'], 'Aire'] = na
                                 live.loc[live['ID'] == row['ID'], 'Numero'] = nn
                                 live.loc[live['ID'] == row['ID'], 'Casque'] = nc
                                 save_data(live, "Feuille 1", [])
                                 st.rerun()
                             
-                            # BOUTON SUPPRESSION RETABLI
+                            # BOUTON POUBELLE SECURISÉ PAR ID
                             if c5.button("🗑️", key=f"del_{row['ID']}"):
-                                live = live[live['ID'] != row['ID']]
+                                live = live[live['ID'] != row['ID']] # Filtre pour exclure cet ID précis
                                 save_data(live, "Feuille 1", [])
                                 st.rerun()
                         st.write("")
@@ -439,7 +454,7 @@ with tab_coach:
             st.markdown("#### 2. Inscriptions & PDF")
             if 'inscr_df' not in st.session_state: st.session_state['inscr_df'] = pd.DataFrame(columns=["Compétition", "Nom", "Prénom", "Année Naissance", "Poids (kg)", "Sexe (M/F)", "Catégorie Calculée"])
             
-            with st.expander("📂 Importer PDF Convocation (V53)"):
+            with st.expander("📂 Importer PDF Convocation (V59)"):
                 pdf_file = st.file_uploader("Glisser PDF", type="pdf")
                 club_key = st.text_input("Mot clé Club", value="SAINT MAURICE")
                 if pdf_file and club_key:
@@ -497,23 +512,27 @@ with tab_coach:
                 to_save = edited.copy()
                 to_save = to_save[to_save["Nom"] != ""]
                 if not to_save.empty:
-                    # SAVE
+                    # 1. SAVE ATHLETES & PRE-INSCRIPTIONS
                     for _, r in to_save.iterrows():
                         if r["Nom"] and r["Année Naissance"]: save_athlete(r["Nom"], r["Prénom"], "", r["Année Naissance"], r["Poids (kg)"], r["Sexe (M/F)"])
-                    final_save = to_save.rename(columns={"Compétition": "Competition_Cible", "Nom": "Nom", "Prénom": "Prenom", "Année Naissance": "Annee", "Poids (kg)": "Poids", "Sexe (M/F)": "Sexe", "Catégorie Calculée": "Categorie", "Aire_PDF": "Aire_Prevue"})
+                    final_save = to_save.rename(columns={"Compétition": "Competition_Cible", "Nom": "Nom", "Prénom": "Prenom", "Année Naissance": "Annee", "Poids": "Poids", "Sexe": "Sexe", "Catégorie Calculée": "Categorie", "Aire_PDF": "Aire_Prevue"})
+                    
                     cols_db = ["Competition_Cible", "Nom", "Prenom", "Annee", "Poids", "Sexe", "Categorie", "Aire_Prevue"]
                     for c in cols_db:
                         if c not in final_save.columns: final_save[c] = ""
+                    
                     combined = pd.concat([pre, final_save[cols_db]], ignore_index=True)
                     dedup = deduplicate_dataframe(combined, ["Competition_Cible", "Nom", "Prenom"])
                     save_data(dedup, "PreInscriptions", [])
                     
-                    # ENVOI PILOTAGE
+                    # 2. ENVOI AU LIVE DIRECTEMENT
                     cur_live = get_live_data()
                     rows_live = []
                     st.session_state['Aire_PDF'] = {}
+                    
                     for _, r in to_save.iterrows():
                         nom_cpl = f"{r['Nom']} {r['Prénom']}".strip()
+                        # Gestion Aire
                         aire_p = 0
                         if 'Aire_PDF' in r and pd.notna(r['Aire_PDF']): 
                             try: aire_p = int(r['Aire_PDF'])
@@ -526,27 +545,12 @@ with tab_coach:
                     if rows_live:
                         save_data(pd.concat([cur_live, pd.DataFrame(rows_live)], ignore_index=True), "Feuille 1", [])
                         st.success(f"✅ {len(rows_live)} envoyés au Pilotage !"); st.balloons()
-                    else: st.info("Liste sauvegardée.")
+                    else:
+                        st.info("Liste sauvegardée. (Déjà présents au Pilotage)")
                 else: st.warning("Liste vide.")
 
             st.write("---")
             if st.button("🗑️ Reset Live"): save_data(pd.DataFrame(columns=live.columns), "Feuille 1", []); st.rerun()
-
-# 3. PROFILS
-with tab_profil:
-    st.header("Fiches"); h=get_history_data(); a=get_athletes_db(); n=set(h['Combattant']) if not h.empty else set(); 
-    if not a.empty: 
-        a['Full'] = a['Nom'] + " " + a['Prenom']
-        n.update(a['Full'])
-    if n: 
-        s=st.selectbox("Nom", sorted(list(n))); 
-        if not a.empty: 
-            parts = s.split(); nm = " ".join(parts[:-1]); pm = parts[-1]
-            i=a[(a['Nom']==nm) & (a['Prenom']==pm)]
-            if not i.empty: st.markdown(f"**{i.iloc[0]['Titre_Honorifique']}**")
-        if not h.empty:
-            m=h[h['Combattant']==s].sort_values('Date', ascending=False)
-            for _,r in m.iterrows(): st.write(f"{r['Medaille']} - {r['Competition']}")
 
 # 4. CLUB
 with tab_club:

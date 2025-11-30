@@ -14,7 +14,7 @@ except ImportError:
     pdfplumber = None
 
 # --- CONFIGURATION & DESIGN ---
-st.set_page_config(page_title="Fight Tracker V51", page_icon="🥊", layout="wide")
+st.set_page_config(page_title="Fight Tracker V52", page_icon="🥊", layout="wide")
 
 st.markdown("""
     <style>
@@ -35,16 +35,7 @@ st.markdown("""
         .corner-red { color: #FF4B4B; border: 1px solid #FF4B4B; padding: 2px 6px; border-radius: 4px; font-size: 0.8em; margin-right: 5px;}
         .corner-blue { color: #2196F3; border: 1px solid #2196F3; padding: 2px 6px; border-radius: 4px; font-size: 0.8em; margin-right: 5px;}
         .stToast { background-color: #00C853 !important; color: white !important; }
-        
-        /* ZONE DISPATCH */
-        .dispatch-box { 
-            border: 1px solid #444; 
-            padding: 10px; 
-            border-radius: 8px; 
-            background-color: #2b2d35; 
-            margin-bottom: 10px; 
-        }
-        .dispatch-title { color: #aaa; font-size: 0.8em; margin-bottom: 2px; }
+        .dispatch-box { border: 2px dashed #FFD700; padding: 15px; border-radius: 10px; background-color: #2b2d35; margin-bottom: 20px; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -56,7 +47,20 @@ def get_client():
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     return gspread.authorize(creds)
 
-# --- LOGIQUE ---
+# --- OUTILS DE NORMALISATION (LE CŒUR DU SYSTÈME) ---
+def clean_str(txt):
+    """Nettoie une chaine : majuscules, sans espaces inutiles"""
+    if pd.isna(txt): return ""
+    return str(txt).strip().upper()
+
+def clean_name_data(nom, prenom):
+    """Renvoie un tuple propre (NOM, Prénom)"""
+    n = clean_str(nom)
+    # Prénom : Première lettre Maj, reste min, mais gère les composés
+    p = str(prenom).strip().title() 
+    return n, p
+
+# --- LOGIQUE MÉTIER ---
 def calculer_categorie(annee, poids, sexe):
     try:
         if not annee or not poids: return ""
@@ -70,6 +74,7 @@ def calculer_categorie(annee, poids, sexe):
         elif 16 <= age <= 17: cat_age = "Junior"
         elif 18 <= age <= 40: cat_age = "Senior"
         elif age >= 41: cat_age = "Vétéran"
+        
         limites = []
         if cat_age == "Poussin": limites = [23, 28, 32, 37, 42, 47]
         elif cat_age == "Benjamin": limites = [28, 32, 37, 42, 47, 52]
@@ -97,6 +102,47 @@ def calculer_nombre_combats(nb_participants):
         return "Tournoi"
     except: return "?"
 
+# --- IMPORT SPORTMEMBER ---
+def import_sportmember_db(uploaded_file):
+    try:
+        if uploaded_file.name.endswith('.csv'):
+            try: df = pd.read_csv(uploaded_file, sep=';')
+            except: df = pd.read_csv(uploaded_file, sep=',')
+        else:
+            df = pd.read_excel(uploaded_file)
+            
+        df.columns = df.columns.str.strip().str.lower()
+        cleaned_data = []
+        for _, row in df.iterrows():
+            nom = next((row[c] for c in df.columns if 'nom' in c and 'pré' not in c), "")
+            prenom = next((row[c] for c in df.columns if 'pré' in c or 'first' in c), "")
+            naissance = next((row[c] for c in df.columns if 'naiss' in c or 'birth' in c), "")
+            sexe_raw = next((row[c] for c in df.columns if 'sexe' in c or 'gender' in c), "")
+            
+            annee = ""
+            if pd.notna(naissance):
+                s_naiss = str(naissance)
+                match_year = re.search(r'(19|20)\d{2}', s_naiss)
+                if match_year: annee = match_year.group(0)
+            
+            sexe = "M"
+            if str(sexe_raw).lower().startswith('f') or str(sexe_raw).lower().startswith('w'): sexe = "F"
+            
+            if nom and prenom:
+                n_clean, p_clean = clean_name_data(nom, prenom)
+                cleaned_data.append({
+                    "Nom": n_clean,
+                    "Prenom": p_clean,
+                    "Annee_Naissance": annee,
+                    "Sexe": sexe,
+                    "Poids": "",
+                    "Titre_Honorifique": ""
+                })
+        return pd.DataFrame(cleaned_data)
+    except Exception as e:
+        st.error(f"Erreur fichier: {e}")
+        return pd.DataFrame()
+
 # --- IMPORT PDF ---
 def parse_pdf_ffkmda(pdf_file, club_filter_keyword):
     if pdfplumber is None: return pd.DataFrame()
@@ -118,7 +164,6 @@ def parse_pdf_ffkmda(pdf_file, club_filter_keyword):
             if df_all.empty: return pd.DataFrame()
             counts = df_all['Category'].value_counts()
             club_data = []
-            
             for _, row in df_all.iterrows():
                 if club_filter_keyword.upper() in row['Raw_Info'].upper():
                     aire = 0
@@ -130,14 +175,18 @@ def parse_pdf_ffkmda(pdf_file, club_filter_keyword):
                     nom = " ".join(parts[:-1]) if len(parts)>1 else row['Athlete']
                     prenom = parts[-1] if len(parts)>1 else ""
                     
+                    n_clean, p_clean = clean_name_data(nom, prenom)
+                    
                     club_data.append({
-                        "Nom": nom.upper(),
-                        "Prénom": prenom.capitalize(),
+                        "Nom": n_clean,
+                        "Prénom": p_clean,
                         "Catégorie Calculée": f"{row['Category']} ({txt_combats})",
                         "Aire_PDF": aire
                     })
             return pd.DataFrame(club_data)
-    except Exception as e: st.error(f"PDF Error: {e}"); return pd.DataFrame()
+    except Exception as e:
+        st.error(f"Erreur PDF: {e}")
+        return pd.DataFrame()
 
 # --- BDD ROBUSTE ---
 def get_worksheet_safe(name, cols):
@@ -174,27 +223,45 @@ def save_data(df, sheet_name, cols_def):
         ws.clear()
         df = df.fillna("")
         ws.update([df.columns.values.tolist()] + df.values.tolist())
-        fetch_data.clear() # FORCE LE RAFRAICHISSEMENT
+        fetch_data.clear()
 
+# --- INTELLIGENCE ANTI-DOUBLON ---
 def save_athlete(nom, prenom, titre, annee, poids, sexe):
     cols_order = ["Nom", "Prenom", "Annee_Naissance", "Poids", "Sexe", "Titre_Honorifique"]
     ws = get_worksheet_safe("Athletes", cols_order)
     if ws:
         df = pd.DataFrame(ws.get_all_records())
         if "Nom" not in df.columns: df = pd.DataFrame(columns=cols_order)
-        nom = str(nom).strip().upper()
-        prenom = str(prenom).strip().capitalize()
-        mask = (df['Nom'] == nom) & (df['Prenom'] == prenom)
+        
+        # Normalisation
+        n_clean, p_clean = clean_name_data(nom, prenom)
+        
+        # Recherche intelligente
+        # On crée une clé unique temporaire pour comparer
+        df['Key'] = df['Nom'].astype(str).str.strip().str.upper() + "|" + df['Prenom'].astype(str).str.strip().str.upper()
+        search_key = n_clean + "|" + p_clean.upper()
+        
+        mask = df['Key'] == search_key
+        
         if mask.any():
+            # UPDATE : On ne touche qu'aux champs non vides
             idx = df[mask].index[0]
             if titre: df.at[idx, "Titre_Honorifique"] = titre
             if annee: df.at[idx, "Annee_Naissance"] = annee
             if poids: df.at[idx, "Poids"] = poids
             if sexe: df.at[idx, "Sexe"] = sexe
         else:
-            new_row = pd.DataFrame([{"Nom": nom, "Prenom": prenom, "Titre_Honorifique": titre, "Annee_Naissance": annee, "Poids": poids, "Sexe": sexe}])
+            # INSERT
+            new_row = pd.DataFrame([{
+                "Nom": n_clean, "Prenom": p_clean, "Titre_Honorifique": titre,
+                "Annee_Naissance": annee, "Poids": poids, "Sexe": sexe
+            }])
             df = pd.concat([df, new_row], ignore_index=True)
+        
+        # Nettoyage avant save
+        if 'Key' in df.columns: df = df.drop(columns=['Key'])
         df = df[cols_order].fillna("")
+        
         ws.clear(); ws.update([df.columns.values.tolist()] + df.values.tolist()); fetch_data.clear()
 
 def process_end_match(live_df, idx, resultat, nom_compet, date_compet, target_evt):
@@ -212,22 +279,35 @@ def process_end_match(live_df, idx, resultat, nom_compet, date_compet, target_ev
     if target_evt and resultat in ["🥇 Or", "🥈 Argent"]:
         ath = get_athletes_db()
         pre = get_preinscriptions_db()
+        
+        # Split nom complet
         parts = str(nom_full).split()
         nom_s = " ".join(parts[:-1]); prenom_s = parts[-1] if len(parts)>1 else ""
+        n_clean, p_clean = clean_name_data(nom_s, prenom_s)
+        
+        # Check doublon pre-inscription
         exists = False
         if not pre.empty:
-            match = pre[(pre['Nom'] == nom_s) & (pre['Prenom'] == prenom_s) & (pre['Competition_Cible'] == target_evt)]
-            if not match.empty: exists = True
+            # Clé unique approximative
+            pre['Key'] = pre['Nom'].str.upper() + pre['Prenom'].str.upper() + pre['Competition_Cible']
+            search_key = n_clean + p_clean.upper() + target_evt
+            if search_key in pre['Key'].values: exists = True
+        
         if not exists:
             inf_row = pd.DataFrame()
-            if not ath.empty: inf_row = ath[(ath['Nom'] == nom_s) & (ath['Prenom'] == prenom_s)]
+            if not ath.empty:
+                # Recherche athlete
+                ath['Key'] = ath['Nom'].str.upper() + ath['Prenom'].str.upper()
+                search_ath_key = n_clean + p_clean.upper()
+                inf_row = ath[ath['Key'] == search_ath_key]
+            
             cat = "?"
             if not inf_row.empty:
                 inf = inf_row.iloc[0]
                 cat = calculer_categorie(inf['Annee_Naissance'], inf['Poids'], inf['Sexe'])
-                new_q = pd.DataFrame([{"Competition_Cible": target_evt, "Nom": nom_s, "Prenom": prenom_s, "Annee": inf['Annee_Naissance'], "Poids": inf['Poids'], "Sexe": inf['Sexe'], "Categorie": cat}])
+                new_q = pd.DataFrame([{"Competition_Cible": target_evt, "Nom": n_clean, "Prenom": p_clean, "Annee": inf['Annee_Naissance'], "Poids": inf['Poids'], "Sexe": inf['Sexe'], "Categorie": cat}])
             else:
-                new_q = pd.DataFrame([{"Competition_Cible": target_evt, "Nom": nom_s, "Prenom": prenom_s, "Categorie": "A compléter"}])
+                new_q = pd.DataFrame([{"Competition_Cible": target_evt, "Nom": n_clean, "Prenom": p_clean, "Categorie": "A compléter"}])
             save_data(pd.concat([pre, new_q], ignore_index=True), "PreInscriptions", [])
             st.toast(f"Qualifié !", icon="🚀")
 
@@ -254,7 +334,8 @@ with tab_public:
                 if not df_ath.empty:
                     parts = str(nom_complet).split()
                     if len(parts) > 1:
-                        n = " ".join(parts[:-1]); p = parts[-1]
+                        n, p = clean_name_data(" ".join(parts[:-1]), parts[-1])
+                        # Recherche optimisée
                         info = df_ath[(df_ath['Nom'] == n) & (df_ath['Prenom'] == p)]
                         if not info.empty: titre = info.iloc[0]['Titre_Honorifique']
                 med_badge = f"🏅 {row['Medaille_Actuelle']}" if row['Medaille_Actuelle'] else ""
@@ -286,43 +367,27 @@ with tab_coach:
                 waiting_list = live[(live['Statut'] != "Terminé") & (live['Numero'] == 0)]
                 if not waiting_list.empty:
                     st.markdown("### ⚠️ À PROGRAMMER (Tirage)")
-                    
+                    st.markdown('<div class="dispatch-box">', unsafe_allow_html=True)
                     for idx, row in waiting_list.iterrows():
-                        with st.container():
-                            st.markdown(f"<div class='dispatch-box'>", unsafe_allow_html=True)
-                            c1, c2, c3, c4, c5 = st.columns([3, 1, 1, 2, 1])
-                            
-                            with c1:
-                                st.markdown(f"**🥊 {row['Combattant']}**")
-                                st.caption(f"{row.get('Details_Tour', '')}")
-                            
-                            # AUTO-REMPLISSAGE AIRE (IMPORTANT)
-                            # On vérifie si Aire est déjà remplie (depuis import), sinon 1
-                            val_aire = 1
-                            if pd.notna(row['Aire']) and int(row['Aire']) > 0:
-                                val_aire = int(row['Aire'])
-                                
-                            na = c2.number_input("Aire", value=val_aire, min_value=1, key=f"wa_{idx}", label_visibility="collapsed")
-                            nn = c3.number_input("N°", value=1, min_value=1, key=f"wn_{idx}", label_visibility="collapsed")
-                            nc = c4.radio("Casque", ["Rouge", "Bleu"], horizontal=True, key=f"wc_{idx}", label_visibility="collapsed")
-                            
-                            # Bouton Supprimer
-                            if c5.button("🗑️", key=f"del_{idx}"):
-                                live = live.drop(idx)
-                                save_data(live, "Feuille 1", [])
-                                st.rerun()
-                                
-                            # Bouton Valider (Sous le reste pour alignement)
-                            if st.button(f"VALIDER {row['Combattant']}", key=f"go_{idx}", type="primary"):
-                                live.at[idx, 'Aire'] = na
-                                live.at[idx, 'Numero'] = nn
-                                live.at[idx, 'Casque'] = nc
-                                save_data(live, "Feuille 1", [])
-                                st.rerun()
-                                
-                            st.markdown("</div>", unsafe_allow_html=True)
+                        c_nom, c_aire, c_num, c_casque, c_btn = st.columns([2, 1, 1, 2, 1])
+                        with c_nom:
+                            st.markdown(f"**🥊 {row['Combattant']}**")
+                            st.caption(f"{row.get('Details_Tour', '')}")
+                        
+                        def_aire = 1
+                        if 'Aire_PDF' in st.session_state and row['Combattant'] in st.session_state['Aire_PDF']:
+                             def_aire = st.session_state['Aire_PDF'][row['Combattant']]
+                        
+                        na = c_aire.number_input("Aire", value=int(def_aire), min_value=1, key=f"wa_{idx}", label_visibility="collapsed")
+                        nn = c_num.number_input("N°", value=1, min_value=1, key=f"wn_{idx}", label_visibility="collapsed")
+                        nc = c_casque.radio("Casque", ["Rouge", "Bleu"], horizontal=True, key=f"wc_{idx}", label_visibility="collapsed")
+                        
+                        if c_btn.button("Go", key=f"wb_{idx}", type="primary"):
+                            live.at[idx, 'Aire'] = na; live.at[idx, 'Numero'] = nn; live.at[idx, 'Casque'] = nc
+                            save_data(live, "Feuille 1", []); st.rerun()
+                        st.markdown("---")
+                    st.markdown('</div>', unsafe_allow_html=True)
 
-                # ZONE PILOTAGE
                 active_view = live[(live['Statut'] != "Terminé") & (live['Numero'] > 0)].sort_values('Numero')
                 if not active_view.empty:
                     st.markdown("### 🔥 EN COURS")
@@ -357,7 +422,28 @@ with tab_coach:
             else: st.info("Vide. Importez des inscrits.")
 
         with subtab_admin:
-            st.markdown("#### 1. Configuration")
+            st.markdown("#### 1. Base de Données Club")
+            up_sm = st.file_uploader("Fichier Adhérents", type=['xlsx', 'csv'], key="sm_up")
+            sync_mode = st.checkbox("🗑️ Mode Synchro Totale (Supprime les absents du fichier)")
+            if up_sm and st.button("🚀 Mettre à jour la Base Athlètes"):
+                df_sm = import_sportmember_db(up_sm)
+                if not df_sm.empty:
+                    if sync_mode:
+                         # Mode radical : on écrase tout
+                         save_data(df_sm, "Athletes", ["Nom", "Prenom", "Annee_Naissance", "Poids", "Sexe", "Titre_Honorifique"])
+                         st.success("Base entièrement remplacée !")
+                    else:
+                         # Mode doux : on met à jour
+                         count = 0
+                         progress = st.progress(0)
+                         for i, row in df_sm.iterrows():
+                             save_athlete(row['Nom'], row['Prenom'], "", row['Annee_Naissance'], row['Poids'], row['Sexe'])
+                             count += 1
+                             progress.progress(min(count / len(df_sm), 1.0))
+                         st.success("Mise à jour terminée !")
+
+            st.write("---")
+            st.markdown("#### 2. Configuration")
             c1, c2 = st.columns(2)
             cal_opts = get_calendar_db()
             opts = cal_opts['Nom_Competition'].tolist() if not cal_opts.empty else ["Entraînement"]
@@ -378,48 +464,45 @@ with tab_coach:
                     to_save = to_save[to_save["Nom"] != ""]
                     if not to_save.empty:
                         for _, r in to_save.iterrows():
-                            if r["Nom"] and r["Année Naissance"]: save_athlete(r["Nom"], r["Prénom"], "", r["Année Naissance"], r["Poids (kg)"], r["Sexe (M/F)"])
+                            if r["Nom"]: save_athlete(r["Nom"], r["Prénom"], "", r["Année Naissance"], r["Poids (kg)"], r["Sexe (M/F)"])
                         final_save = to_save.rename(columns={"Compétition": "Competition_Cible", "Nom": "Nom", "Prénom": "Prenom", "Année Naissance": "Annee", "Poids (kg)": "Poids", "Sexe (M/F)": "Sexe", "Catégorie Calculée": "Categorie"})
                         current_pre = get_preinscriptions_db()
-                        save_data(pd.concat([current_pre, final_save[["Competition_Cible", "Nom", "Prenom", "Annee", "Poids", "Sexe", "Categorie"]]], ignore_index=True), "PreInscriptions", [])
-                        st.toast("Sauvegardé auto", icon="💾")
+                        
+                        # Anti-doublon strict lors de la sauvegarde
+                        final_to_push = []
+                        for _, new_r in final_save.iterrows():
+                            is_in = False
+                            if not current_pre.empty:
+                                # On compare Nom+Prenom+Compet
+                                mask = (current_pre['Nom'] == new_r['Nom']) & (current_pre['Prenom'] == new_r['Prenom']) & (current_pre['Competition_Cible'] == new_r['Competition_Cible'])
+                                if mask.any(): is_in = True
+                            if not is_in: final_to_push.append(new_r)
+                        
+                        if final_to_push:
+                            save_data(pd.concat([current_pre, pd.DataFrame(final_to_push)], ignore_index=True), "PreInscriptions", [])
+                            st.toast(f"{len(final_to_push)} nouveaux sauvegardés", icon="💾")
                 
                 pre = get_preinscriptions_db()
                 sub = pre[pre['Competition_Cible'] == nom_c]
                 if not sub.empty:
                     cur = get_live_data()
                     rows = []
-                    # DICTIONNAIRE AIRE TEMPORAIRE POUR MAPPER PDF -> LIVE
-                    map_aires = {}
-                    if 'inscr_df' in st.session_state and 'Aire_PDF' in st.session_state['inscr_df'].columns:
-                        for _, r_inscr in st.session_state['inscr_df'].iterrows():
-                            key = f"{r_inscr['Nom']} {r_inscr['Prénom']}"
-                            if pd.notna(r_inscr['Aire_PDF']):
-                                map_aires[key] = int(r_inscr['Aire_PDF'])
-
+                    st.session_state['Aire_PDF'] = {} 
                     for _, r in sub.iterrows():
-                        nom_complet = f"{r['Nom']} {r['Prenom']}".strip()
-                        if nom_complet and (cur.empty or nom_complet not in cur['Combattant'].values):
-                            # On récupère l'aire si connue
-                            aire_to_set = map_aires.get(nom_complet, 0)
-                            
-                            rows.append({
-                                "Combattant": nom_complet, 
-                                "Aire": aire_to_set, 
-                                "Numero":0, 
-                                "Casque":"Rouge", 
-                                "Statut":"A venir", 
-                                "Palmares":"", 
-                                "Details_Tour": r.get('Categorie', ''), 
-                                "Medaille_Actuelle":""
-                            })
+                        nom_cpl = f"{r['Nom']} {r['Prenom']}".strip()
+                        aire_p = 0
+                        if 'Aire_PDF' in r and r['Aire_PDF']: aire_p = int(r['Aire_PDF'])
+                        if aire_p: st.session_state['Aire_PDF'][nom_cpl] = aire_p
+                        
+                        if nom_cpl and (cur.empty or nom_cpl not in cur['Combattant'].values):
+                            rows.append({"Combattant": nom_cpl, "Aire":0, "Numero":0, "Casque":"Rouge", "Statut":"A venir", "Palmares":"", "Details_Tour": r.get('Categorie', ''), "Medaille_Actuelle":""})
                     if rows: save_data(pd.concat([cur, pd.DataFrame(rows)], ignore_index=True), "Feuille 1", []); st.success(f"✅ {len(rows)} importés !"); st.rerun()
                     else: st.warning("Déjà dans le Live.")
                 else: st.warning("Aucun inscrit.")
             
             st.write("---")
-            st.markdown("#### 2. Inscriptions & PDF")
-            if 'inscr_df' not in st.session_state: st.session_state['inscr_df'] = pd.DataFrame(columns=["Compétition", "Nom", "Prénom", "Année Naissance", "Poids (kg)", "Sexe (M/F)", "Catégorie Calculée", "Aire_PDF"])
+            st.markdown("#### 3. Inscriptions & PDF")
+            if 'inscr_df' not in st.session_state: st.session_state['inscr_df'] = pd.DataFrame(columns=["Compétition", "Nom", "Prénom", "Année Naissance", "Poids (kg)", "Sexe (M/F)", "Catégorie Calculée"])
             
             with st.expander("📂 Importer PDF Convocation (V48)"):
                 pdf_file = st.file_uploader("Glisser PDF", type="pdf")
@@ -435,27 +518,68 @@ with tab_coach:
                             for _, row in found_pdf.iterrows():
                                 annee, poids, sexe = "", "", ""
                                 if not ath_db.empty:
-                                    match = ath_db[(ath_db['Nom'] == row['Nom']) & (ath_db['Prenom'] == row['Prénom'])]
+                                    # Nettoyage pour recherche
+                                    n, p = clean_name_data(row['Nom'], row['Prénom'])
+                                    match = ath_db[(ath_db['Nom'] == n) & (ath_db['Prenom'] == p)]
                                     if not match.empty:
                                         info = match.iloc[0]
                                         annee, poids, sexe = info['Annee_Naissance'], info['Poids'], info['Sexe']
-                                final_list.append({
-                                    "Compétition": nom_c, "Nom": row['Nom'], "Prénom": row['Prénom'],
-                                    "Année Naissance": annee, "Poids (kg)": poids, "Sexe (M/F)": sexe,
-                                    "Catégorie Calculée": row['Catégorie Calculée'],
-                                    "Aire_PDF": row['Aire_PDF']
-                                })
+                                final_list.append({"Compétition": nom_c, "Nom": row['Nom'], "Prénom": row['Prénom'], "Année Naissance": annee, "Poids (kg)": poids, "Sexe (M/F)": sexe, "Catégorie Calculée": row['Catégorie Calculée'], "Aire_PDF": row['Aire_PDF']})
                             st.session_state['inscr_df'] = pd.concat([st.session_state['inscr_df'], pd.DataFrame(final_list)], ignore_index=True)
                             st.success("Transféré !")
                         else: st.warning("Rien trouvé.")
 
-            # ... (Le reste de l'inscription manuelle reste ici si besoin)
-            
+            with st.expander("📂 Charger depuis la Base Athlètes"):
+                db_ath = get_athletes_db()
+                if not db_ath.empty:
+                    db_ath['Full_Name'] = db_ath.apply(lambda x: f"{x['Nom']} {x['Prenom']}", axis=1)
+                    selected_athletes = st.multiselect("Sélectionnez :", db_ath['Full_Name'].unique())
+                    if st.button("📥 Ajouter"):
+                        to_add = []
+                        for full in selected_athletes:
+                            info = db_ath[db_ath['Full_Name'] == full].iloc[0]
+                            to_add.append({"Compétition": nom_c, "Nom": info['Nom'], "Prénom": info['Prenom'], "Année Naissance": info['Annee_Naissance'], "Poids (kg)": info['Poids'], "Sexe (M/F)": info['Sexe'], "Catégorie Calculée": calculer_categorie(info['Annee_Naissance'], info['Poids'], info['Sexe'])})
+                        if to_add: st.session_state['inscr_df'] = pd.concat([st.session_state['inscr_df'], pd.DataFrame(to_add)], ignore_index=True); st.rerun()
+                else: st.warning("Base vide.")
+
             edited = st.data_editor(st.session_state['inscr_df'], num_rows="dynamic", use_container_width=True, column_config={"Compétition": st.column_config.Column(disabled=True), "Sexe (M/F)": st.column_config.SelectboxColumn(options=["M", "F"]), "Année Naissance": st.column_config.NumberColumn(format="%d"), "Poids (kg)": st.column_config.NumberColumn(format="%.1f")})
             
-            # ... (Boutons WhatsApp, Sauvegarder, etc. inchangés)
-            # J'abrège ici pour rester dans la limite de taille, le reste est identique à V50
-            if st.button("🗑️ Reset Live"): save_data(pd.DataFrame(columns=get_live_data().columns), "Feuille 1", []); st.rerun()
+            cm, cw, cs = st.columns(3)
+            if cm.button("✨ Recalculer"):
+                for i, row in edited.iterrows():
+                    edited.at[i, "Compétition"] = nom_c
+                    if edited.at[i, "Année Naissance"] and edited.at[i, "Poids (kg)"]: edited.at[i, "Catégorie Calculée"] = calculer_categorie(edited.at[i, "Année Naissance"], edited.at[i, "Poids (kg)"], edited.at[i, "Sexe (M/F)"])
+                st.session_state['inscr_df'] = edited; st.rerun()
+            
+            if cw.button("📲 WhatsApp"):
+                txt = "\n".join([f"🏆 {r['Compétition']} | 🥊 {str(r['Nom']).upper()} {r['Prénom']} : {r['Catégorie Calculée']}" for _, r in edited.iterrows() if r['Nom']])
+                st.link_button("Envoyer", f"https://wa.me/?text={urllib.parse.quote('📋 INSCRIPTIONS\\n\\n' + txt)}")
+            
+            if cs.button("💾 Sauvegarder Inscriptions"):
+                # Sauvegarde manuelle
+                pre = get_preinscriptions_db()
+                to_save = edited.copy()
+                for _, r in to_save.iterrows():
+                    if r["Nom"] and r["Année Naissance"]: save_athlete(r["Nom"], r["Prénom"], "", r["Année Naissance"], r["Poids (kg)"], r["Sexe (M/F)"])
+                final_save = to_save.rename(columns={"Compétition": "Competition_Cible", "Nom": "Nom", "Prénom": "Prenom", "Année Naissance": "Annee", "Poids (kg)": "Poids", "Sexe (M/F)": "Sexe", "Catégorie Calculée": "Categorie"})
+                
+                # Anti doublon simple
+                final_to_push = []
+                for _, new_r in final_save.iterrows():
+                    is_in = False
+                    if not pre.empty:
+                        mask = (pre['Nom'] == new_r['Nom']) & (pre['Prenom'] == new_r['Prenom']) & (pre['Competition_Cible'] == new_r['Competition_Cible'])
+                        if mask.any(): is_in = True
+                    if not is_in: final_to_push.append(new_r)
+                
+                if final_to_push:
+                    save_data(pd.concat([pre, pd.DataFrame(final_to_push)], ignore_index=True), "PreInscriptions", [])
+                    st.success("Sauvegardé !")
+                else: st.info("Aucun nouveau.")
+                st.session_state['inscr_df'] = pd.DataFrame(columns=edited.columns)
+
+            st.write("---")
+            if st.button("🗑️ Reset Live"): save_data(pd.DataFrame(columns=live.columns), "Feuille 1", []); st.rerun()
 
 # 3 & 4
 with tab_profil:

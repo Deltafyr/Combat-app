@@ -7,10 +7,9 @@ import urllib.parse
 import time
 import pdfplumber
 import re
-import math
 
 # --- CONFIGURATION & DESIGN ---
-st.set_page_config(page_title="Fight Tracker V47", page_icon="🥊", layout="wide")
+st.set_page_config(page_title="Fight Tracker V48", page_icon="🥊", layout="wide")
 
 st.markdown("""
     <style>
@@ -26,11 +25,10 @@ st.markdown("""
         .combat-aire { background: #FFD700; color:black; padding: 2px 8px; border-radius: 10px; font-size: 0.85em; font-weight: bold; }
         .fighter-name { font-size: 1.3em; font-weight: 700; color: #fff; }
         .honor-title { font-size: 0.8em; color: #FFD700; font-style: italic; display:block; opacity:0.8;}
-        
         .corner-red { color: #FF4B4B; border: 1px solid #FF4B4B; padding: 2px 6px; border-radius: 4px; font-size: 0.8em; margin-right: 5px;}
         .corner-blue { color: #2196F3; border: 1px solid #2196F3; padding: 2px 6px; border-radius: 4px; font-size: 0.8em; margin-right: 5px;}
-        .stToast { background-color: #00C853 !important; color: white !important; }
         .dispatch-box { border: 2px dashed #FFD700; padding: 15px; border-radius: 10px; background-color: #2b2d35; margin-bottom: 20px; }
+        .stToast { background-color: #00C853 !important; color: white !important; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -42,7 +40,7 @@ def get_client():
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     return gspread.authorize(creds)
 
-# --- LOGIQUE MÉTIER ---
+# --- LOGIQUE CATÉGORIE ---
 def calculer_categorie(annee, poids, sexe):
     try:
         if not annee or not poids: return ""
@@ -65,6 +63,7 @@ def calculer_categorie(annee, poids, sexe):
         elif cat_age in ["Junior", "Senior", "Vétéran"]:
             if sexe == "F": limites = [48, 52, 56, 60, 65, 70]
             else: limites = [57, 63, 69, 74, 79, 84, 89, 94]
+        
         cat_poids = "Hors cat."
         if limites and poids > limites[-1]: cat_poids = f"+{limites[-1]}kg"
         else:
@@ -73,55 +72,104 @@ def calculer_categorie(annee, poids, sexe):
         return f"{cat_age} {sexe} {cat_poids}"
     except: return "?"
 
-def estimer_tours(nb_competiteurs):
-    """Calcule le nombre de tours max selon le nombre de participants"""
+# --- LOGIQUE TOURS (CORRIGÉE) ---
+def calculer_nombre_combats(nb_participants):
+    """Règles FFKMDA pour déterminer le nombre de tours"""
     try:
-        n = int(nb_competiteurs)
-        if n <= 1: return "Finale directe (1 cbt)"
-        if n == 2: return "Finale directe (1 cbt)"
-        if n == 3: return "Poule (1 ou 2 cbts)"
-        if n == 4: return "Demi + Finale (Max 2 cbts)"
-        if 5 <= n <= 8: return "Quart -> Finale (Max 3 cbts)"
-        if 9 <= n <= 16: return "8ème -> Finale (Max 4 cbts)"
-        return "Max 4 combats"
-    except: return "Inconnu"
+        n = int(nb_participants)
+        if n <= 1: return "Seul (Forfait ?)"
+        if n == 2: return "1 (Finale Directe)"
+        if n == 3: return "1 ou 2 (Poule)"
+        if n == 4: return "2 (Demi + Finale)"
+        if 5 <= n <= 8: return "3 (Quart -> Finale)"
+        if 9 <= n <= 16: return "4 (8ème -> Finale)"
+        return "4+ (Grand tournoi)"
+    except: return "?"
 
-# --- IMPORT PDF ---
-def parse_pdf_convocation(pdf_file, athletes_db):
-    found_data = []
+# --- ANALYSE PDF AVANCÉE ---
+def parse_pdf_ffkmda(pdf_file, club_filter_keyword):
+    all_entries = []
+    
     try:
         with pdfplumber.open(pdf_file) as pdf:
-            full_text = ""
+            # 1. EXTRACTION GLOBALE
             for page in pdf.pages:
-                full_text += page.extract_text() + "\n"
+                # Extraction table (méthode FFKMDA souvent en tableau)
+                table = page.extract_table()
+                if table:
+                    # On nettoie les lignes vides
+                    for row in table:
+                        # row est une liste de strings. Ex: ['KL Poussin...', 'NOM Prenom', 'AIRE 2\nCLUB', ...]
+                        # On convertit tout en une seule chaine pour l'analyse regex si besoin, ou on garde les colonnes
+                        # La structure FFKMDA est souvent : [Categorie, Athlete, Club/Aire, Pesée...]
+                        
+                        # Nettoyage des None
+                        clean_row = [str(cell).replace('\n', ' ') if cell else "" for cell in row]
+                        
+                        # On saute les lignes d'en-tête
+                        if "Catégorie" in clean_row[0] or "Athlète" in clean_row[1]:
+                            continue
+                            
+                        # On stocke une structure simple
+                        entry = {
+                            "Category": clean_row[0].strip(),
+                            "Athlete": clean_row[1].strip(),
+                            "Raw_Info": " ".join(clean_row) # Tout le reste pour chercher l'aire et le club
+                        }
+                        # Si la catégorie est vide (cellule fusionnée), on prend la précédente
+                        if not entry["Category"] and all_entries:
+                            entry["Category"] = all_entries[-1]["Category"]
+                            
+                        if entry["Athlete"]: # Si y'a un nom
+                            all_entries.append(entry)
             
-            # On cherche nos athlètes dans le texte
-            for idx, ath in athletes_db.iterrows():
-                # Construction Nom Complet pour recherche
-                nom_complet = f"{ath['Nom']} {ath['Prenom']}"
-                
-                if nom_complet.upper() in full_text.upper():
-                    # Athlète trouvé ! On essaie de trouver l'aire sur la même ligne
-                    lines = full_text.split('\n')
-                    aire_trouvee = 0
+            # 2. ANALYSE DES POULES (COMPTAGE)
+            df_all = pd.DataFrame(all_entries)
+            if df_all.empty: return pd.DataFrame()
+            
+            # On compte combien de fois chaque catégorie apparait
+            counts = df_all['Category'].value_counts()
+            
+            # 3. FILTRAGE POUR NOTRE CLUB
+            # On cherche le mot clé (ex: "SAINT MAURICE") dans la ligne brute
+            club_data = []
+            
+            for _, row in df_all.iterrows():
+                if club_filter_keyword.upper() in row['Raw_Info'].upper():
+                    # C'est un gars de chez nous !
                     
-                    for line in lines:
-                        if nom_complet.upper() in line.upper():
-                            # Recherche motif "Aire X" ou "Tatami X" ou "Ring X"
-                            match_aire = re.search(r'(?:Aire|Tatami|Ring)\s*(\d+)', line, re.IGNORECASE)
-                            if match_aire:
-                                aire_trouvee = int(match_aire.group(1))
-                            break
+                    # Extraction Aire
+                    aire = 0
+                    match_aire = re.search(r'(?:AIRE|Aire)\s*(\d+)', row['Raw_Info'], re.IGNORECASE)
+                    if match_aire: aire = int(match_aire.group(1))
                     
-                    found_data.append({
-                        "Nom": ath['Nom'],
-                        "Prenom": ath['Prenom'],
-                        "Aire_Estimee": aire_trouvee,
-                        "Nb_Poule": 2 # Valeur par défaut à modifier par le coach
+                    # Calcul nombre de combattants dans sa poule
+                    nb_in_cat = counts.get(row['Category'], 0)
+                    
+                    # Estimation combats
+                    txt_combats = calculer_nombre_combats(nb_in_cat)
+                    
+                    # Séparation Nom Prénom (Approximative : Dernier mot = Prénom)
+                    parts = row['Athlete'].split()
+                    nom = " ".join(parts[:-1]) if len(parts)>1 else row['Athlete']
+                    prenom = parts[-1] if len(parts)>1 else ""
+                    
+                    club_data.append({
+                        "Compétition": "", # Sera rempli par l'appli
+                        "Nom": nom,
+                        "Prénom": prenom,
+                        "Année Naissance": "", # Pas dans le PDF
+                        "Poids (kg)": "", # Pas dans le PDF
+                        "Sexe (M/F)": "", # Pas dans le PDF
+                        "Catégorie Calculée": f"{row['Category']} ({txt_combats})", # On met l'info PDF ici
+                        "Aire_PDF": aire # Info supplémentaire
                     })
+                    
+            return pd.DataFrame(club_data)
+
     except Exception as e:
-        st.error(f"Erreur lecture PDF: {e}")
-    return pd.DataFrame(found_data)
+        st.error(f"Erreur analyse PDF: {e}")
+        return pd.DataFrame()
 
 # --- BDD ROBUSTE ---
 def get_worksheet_safe(name, cols):
@@ -131,8 +179,8 @@ def get_worksheet_safe(name, cols):
     try: 
         ws_list = [s.title for s in sh.worksheets()]
         if name in ws_list: return sh.worksheet(name)
-        else: ws = sh.add_worksheet(name, 1000, len(cols)+2); ws.append_row(cols); return ws
-    except: return None
+        else: ws = sh.add_worksheet(name, 1000, len(cols)+2); ws.append_row(cols); time.sleep(1)
+    return ws
 
 @st.cache_data(ttl=5)
 def fetch_data(sheet_name, expected_cols):
@@ -185,13 +233,11 @@ def process_end_match(live_df, idx, resultat, nom_compet, date_compet, target_ev
     live_df.at[idx, 'Medaille_Actuelle'] = resultat
     live_df.at[idx, 'Palmares'] = resultat
     save_data(live_df, "Feuille 1", [])
-    
     nom_full = live_df.at[idx, 'Combattant']
     hist = get_history_data()
     if nom_full and resultat:
         new_entry = pd.DataFrame([{"Competition": nom_compet, "Date": str(date_compet), "Combattant": nom_full, "Medaille": resultat}])
         save_data(pd.concat([hist, new_entry], ignore_index=True), "Historique", ["Competition", "Date", "Combattant", "Medaille"])
-    
     if target_evt and resultat in ["🥇 Or", "🥈 Argent"]:
         ath = get_athletes_db()
         pre = get_preinscriptions_db()
@@ -214,12 +260,6 @@ def process_end_match(live_df, idx, resultat, nom_compet, date_compet, target_ev
                 new_q = pd.DataFrame([{"Competition_Cible": target_evt, "Nom": nom_s, "Prenom": prenom_s, "Categorie": "A compléter"}])
             save_data(pd.concat([pre, new_q], ignore_index=True), "PreInscriptions", [])
             st.toast(f"Qualifié !", icon="🚀")
-
-# --- HELPER IMPORT ---
-def smart_import_file(uploaded_file):
-    # (Code inchangé pour l'import Excel/CSV...)
-    # ... (Je le garde court ici pour la clarté, il reste identique à la V46)
-    return pd.DataFrame()
 
 # --- INTERFACE ---
 tab_public, tab_coach, tab_profil, tab_historique = st.tabs(["📢 LIVE", "🛠️ COACH", "👤 PROFILS", "🏛️ CLUB"])
@@ -271,29 +311,32 @@ with tab_coach:
             st.caption(f"Événement : **{st.session_state.get('Config_Compet', 'Non Défini')}**")
             live = get_live_data()
             if not live.empty:
-                # ZONE DISPATCH AVEC BOUTON SUPPRESSION
+                # ZONE DISPATCH
                 live['Numero'] = pd.to_numeric(live['Numero'], errors='coerce').fillna(0)
                 waiting_list = live[(live['Statut'] != "Terminé") & (live['Numero'] == 0)]
+                
                 if not waiting_list.empty:
                     st.markdown("### ⚠️ À PROGRAMMER (Tirage)")
+                    st.markdown('<div class="dispatch-box">', unsafe_allow_html=True)
                     for idx, row in waiting_list.iterrows():
-                        with st.container(border=True):
-                            c_nom, c_aire, c_num, c_casque, c_act = st.columns([3, 1, 1, 2, 2])
-                            with c_nom:
-                                st.markdown(f"**🥊 {row['Combattant']}**")
-                                st.caption(f"{row.get('Details_Tour', '')}")
-                            na = c_aire.number_input("Aire", value=int(row['Aire']) if row['Aire'] else 1, key=f"wa_{idx}", label_visibility="collapsed")
-                            nn = c_num.number_input("N°", value=1, min_value=1, key=f"wn_{idx}", label_visibility="collapsed")
-                            nc = c_casque.radio("Casque", ["Rouge", "Bleu"], horizontal=True, key=f"wc_{idx}", label_visibility="collapsed")
-                            
-                            with c_act:
-                                col_go, col_del = st.columns(2)
-                                if col_go.button("GO", key=f"wb_{idx}", type="primary"):
-                                    live.at[idx, 'Aire'] = na; live.at[idx, 'Numero'] = nn; live.at[idx, 'Casque'] = nc
-                                    save_data(live, "Feuille 1", []); st.rerun()
-                                if col_del.button("🗑️", key=f"wd_{idx}"):
-                                    live = live.drop(idx)
-                                    save_data(live, "Feuille 1", []); st.rerun()
+                        c_nom, c_aire, c_num, c_casque, c_btn = st.columns([2, 1, 1, 2, 1])
+                        with c_nom:
+                            st.markdown(f"**🥊 {row['Combattant']}**")
+                            st.caption(f"{row.get('Details_Tour', '')}")
+                        
+                        # Pré-remplissage Aire si détecté dans PDF
+                        default_aire = 1
+                        if 'Aire_PDF' in st.session_state and row['Combattant'] in st.session_state['Aire_PDF']:
+                             default_aire = st.session_state['Aire_PDF'][row['Combattant']]
+                        
+                        na = c_aire.number_input("Aire", value=int(row['Aire']) if row['Aire'] else default_aire, min_value=1, key=f"wa_{idx}", label_visibility="collapsed")
+                        nn = c_num.number_input("N°", value=1, min_value=1, key=f"wn_{idx}", label_visibility="collapsed")
+                        nc = c_casque.radio("Casque", ["Rouge", "Bleu"], horizontal=True, key=f"wc_{idx}", label_visibility="collapsed")
+                        if c_btn.button("Go", key=f"wb_{idx}", type="primary"):
+                            live.at[idx, 'Aire'] = na; live.at[idx, 'Numero'] = nn; live.at[idx, 'Casque'] = nc
+                            save_data(live, "Feuille 1", []); st.rerun()
+                        st.markdown("---")
+                    st.markdown('</div>', unsafe_allow_html=True)
 
                 # ZONE PILOTAGE
                 active_view = live[(live['Statut'] != "Terminé") & (live['Numero'] > 0)].sort_values('Numero')
@@ -362,8 +405,19 @@ with tab_coach:
                 if not sub.empty:
                     cur = get_live_data()
                     rows = []
+                    # On stocke les aires importées du PDF si disponibles
+                    st.session_state['Aire_PDF'] = {}
+                    
                     for _, r in sub.iterrows():
                         nom_complet = f"{r['Nom']} {r['Prenom']}".strip()
+                        
+                        # Récupération Aire PDF si sauvegardée dans pre-inscription (via colonne extra Categorie ou autre astuce, ici on simplifie)
+                        # Pour la V48, on a mis l'aire PDF dans la colonne Categorie pour l'affichage, mais pour le dispatch
+                        # il faudrait une colonne dédiée. On va faire simple :
+                        aire_found = 0
+                        if 'Aire_PDF' in r and r['Aire_PDF']: aire_found = int(r['Aire_PDF'])
+                        if aire_found: st.session_state['Aire_PDF'][nom_complet] = aire_found
+
                         if nom_complet and (cur.empty or nom_complet not in cur['Combattant'].values):
                             rows.append({"Combattant": nom_complet, "Aire":0, "Numero":0, "Casque":"Rouge", "Statut":"A venir", "Palmares":"", "Details_Tour": r.get('Categorie', ''), "Medaille_Actuelle":""})
                     if rows: save_data(pd.concat([cur, pd.DataFrame(rows)], ignore_index=True), "Feuille 1", []); st.success(f"✅ {len(rows)} importés !"); st.rerun()
@@ -374,55 +428,49 @@ with tab_coach:
             st.markdown("#### 2. Inscriptions & PDF")
             if 'inscr_df' not in st.session_state: st.session_state['inscr_df'] = pd.DataFrame(columns=["Compétition", "Nom", "Prénom", "Année Naissance", "Poids (kg)", "Sexe (M/F)", "Catégorie Calculée"])
             
-            # --- IMPORT PDF CONVOCATION (V47) ---
+            # --- IMPORT PDF V48 ---
             with st.expander("📂 Importer PDF Convocation (Calcul des Poules)"):
                 pdf_file = st.file_uploader("Glisser la convocation PDF", type="pdf")
-                if pdf_file:
-                    ath_db = get_athletes_db()
-                    if not ath_db.empty:
-                        found_pdf = parse_pdf_convocation(pdf_file, ath_db)
+                club_key = st.text_input("Mot clé Club (ex: SAINT MAURICE)", value="SAINT MAURICE")
+                
+                if pdf_file and club_key:
+                    if st.button("🔍 Analyser le PDF"):
+                        found_pdf = parse_pdf_ffkmda(pdf_file, club_key)
                         if not found_pdf.empty:
-                            st.success(f"{len(found_pdf)} athlètes trouvés dans le PDF !")
-                            st.info("Indiquez le nombre total de combattants dans la poule pour calculer les tours.")
+                            st.success(f"{len(found_pdf)} athlètes trouvés !")
+                            # On ajoute la compétition courante
+                            found_pdf["Compétition"] = nom_c
+                            # Mapping vers le format Inscription
+                            # On essaie de remplir les infos manquantes via la Base Athlètes
+                            ath_db = get_athletes_db()
+                            final_list = []
                             
-                            # Tableau éditable pour définir la taille des poules
-                            edited_pdf = st.data_editor(
-                                found_pdf, 
-                                column_config={
-                                    "Nb_Poule": st.column_config.NumberColumn("Nb Adversaires ds Poule", min_value=1, step=1),
-                                    "Aire_Estimee": st.column_config.NumberColumn("Aire (PDF)", disabled=True)
-                                },
-                                num_rows="fixed"
-                            )
-                            
-                            if st.button("Transférer vers Inscriptions"):
-                                # On transforme les données PDF en format Inscription
-                                to_add = []
-                                for _, row in edited_pdf.iterrows():
-                                    # Retrouver infos base
-                                    info = ath_db[(ath_db['Nom'] == row['Nom']) & (ath_db['Prenom'] == row['Prenom'])].iloc[0]
-                                    # Calcul du tournoi
-                                    estimation = estimer_tours(row['Nb_Poule'])
-                                    details = f"{estimation} (Poule de {row['Nb_Poule']})"
-                                    
-                                    to_add.append({
-                                        "Compétition": nom_c,
-                                        "Nom": row['Nom'],
-                                        "Prénom": row['Prenom'],
-                                        "Année Naissance": info['Annee_Naissance'],
-                                        "Poids (kg)": info['Poids'],
-                                        "Sexe (M/F)": info['Sexe'],
-                                        "Catégorie Calculée": details # On met l'estimation des tours ici pour l'afficher
-                                    })
+                            for _, row in found_pdf.iterrows():
+                                annee, poids, sexe = "", "", ""
+                                if not ath_db.empty:
+                                    # Recherche dans base
+                                    match = ath_db[(ath_db['Nom'] == row['Nom']) & (ath_db['Prenom'] == row['Prénom'])]
+                                    if not match.empty:
+                                        info = match.iloc[0]
+                                        annee = info['Annee_Naissance']
+                                        poids = info['Poids']
+                                        sexe = info['Sexe']
                                 
-                                st.session_state['inscr_df'] = pd.concat([st.session_state['inscr_df'], pd.DataFrame(to_add)], ignore_index=True)
-                                st.success("Ajoutés au tableau d'inscription ci-dessous !")
-                        else: st.warning("Aucun athlète du club trouvé dans le PDF.")
-                    else: st.error("Base Athlètes vide.")
+                                final_list.append({
+                                    "Compétition": nom_c,
+                                    "Nom": row['Nom'],
+                                    "Prénom": row['Prénom'],
+                                    "Année Naissance": annee,
+                                    "Poids (kg)": poids,
+                                    "Sexe (M/F)": sexe,
+                                    "Catégorie Calculée": row['Catégorie Calculée'] # Contient "3 combats (Poule)"
+                                })
+                            
+                            st.session_state['inscr_df'] = pd.concat([st.session_state['inscr_df'], pd.DataFrame(final_list)], ignore_index=True)
+                            st.success("Transféré dans le tableau ci-dessous !")
+                        else: st.warning(f"Aucun résultat pour '{club_key}' dans ce PDF.")
 
-            # ... (Reste du code d'inscription inchangé)
             with st.expander("📂 Charger depuis la Base Athlètes (Manuel)"):
-                # (Code existant V46...)
                 db_ath = get_athletes_db()
                 if not db_ath.empty:
                     db_ath['Full_Name'] = db_ath.apply(lambda x: f"{x['Nom']} {x['Prenom']}", axis=1)
@@ -460,7 +508,7 @@ with tab_coach:
             st.write("---")
             if st.button("🗑️ Reset Live"): save_data(pd.DataFrame(columns=live.columns), "Feuille 1", []); st.rerun()
 
-# 3 & 4 (Inchangé)
+# 3 & 4
 with tab_profil:
     st.header("Fiches"); h=get_history_data(); a=get_athletes_db(); n=set(h['Combattant']) if not h.empty else set(); 
     if not a.empty: 

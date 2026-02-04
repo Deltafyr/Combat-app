@@ -7,3 +7,9 @@ requests
 beautifulsoup4
 lxml
 html5lib
+selenium
+webdriver-manager
+beautifulsoup4
+pandas
+gspread
+oauth2client
